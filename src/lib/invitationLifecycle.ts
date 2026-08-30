@@ -12,3 +12,7 @@ export function invitationState(invitation: Pick<Invitation, "accepted_at" | "re
 export function isRevocableInvitation(invitation: Pick<Invitation, "accepted_at" | "revoked_at" | "expires_at">, now = Date.now()): boolean {
   return invitationState(invitation, now) === "Pending";
 }
+
+export function isRemovableInvitation(invitation: Pick<Invitation, "accepted_at">): boolean {
+  return invitation.accepted_at === null;
+}

@@ -58,7 +58,7 @@ import {
 } from "./lib/data";
 import { isHeightValid, parseHeightInches, previousScanPosition, scanSteps, type ScanStep, validateUpload } from "./lib/scanFlow";
 import { ellipseRadiiForCircumference, modelHeightCm, modelMeasurementCm, normalizeModelMeasurementKey } from "./lib/measurementMapping";
-import { invitationState, isRevocableInvitation } from "./lib/invitationLifecycle";
+import { invitationState, isRemovableInvitation } from "./lib/invitationLifecycle";
 import { requestScanProcessing, processingCopy } from "./lib/reconstructionProvider";
 import { createSignedStorageUrl, deleteScanAsset, uploadScanAsset } from "./lib/storage";
 import { subscribeToNodeScan } from "./lib/nodeApi";
@@ -2270,14 +2270,14 @@ function AdminInvitations({ profile }: { profile: Profile }) {
     } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
   };
   const removeInvitation = async (invitation: Invitation) => {
-    if (!isRevocableInvitation(invitation) || removingId) return;
-    if (!window.confirm(`Remove the invitation for ${invitation.email}? They will need a new invitation.`)) return;
+    if (!isRemovableInvitation(invitation) || removingId) return;
+    if (!window.confirm(`Remove the invitation for ${invitation.email}? This permanently deletes the invitation and its secure token.`)) return;
     setRemovingId(invitation.id); setRemoveError(""); setRemoveNotice(""); setError(""); setNotice(""); setInviteUrl("");
     try {
       await revokeDressmakerInvitation(invitation.id);
       setEmail(invitation.email);
       setOrganizationId(invitation.organization_id);
-      setRemoveNotice(`Invitation removed. You can send a new invitation to ${invitation.email}.`);
+      setRemoveNotice(`Invitation removed from Supabase. You can send a new invitation to ${invitation.email}.`);
       invitationsState.reload();
     } catch (reason: unknown) {
       setRemoveError(readableError(reason));
@@ -2316,7 +2316,7 @@ function AdminInvitations({ profile }: { profile: Profile }) {
             <span className="invite-expiry">Expires {formatDate(invitation.expires_at)}</span>
             <Badge tone={state === "Accepted" ? "success" : state === "Pending" ? "warning" : "neutral"}>{state}</Badge>
             {invitation.email_delivery_status && <Badge tone={invitation.email_delivery_status === "sent" ? "success" : invitation.email_delivery_status === "failed" ? "danger" : "warning"}>{invitation.email_delivery_status === "sent" ? "Email sent" : invitation.email_delivery_status === "not_configured" ? "Email not configured" : "Email " + invitation.email_delivery_status}</Badge>}
-            {state === "Pending" && <Button variant="ghost" icon="x" className="invitation-remove" onClick={() => void removeInvitation(invitation)} disabled={Boolean(removingId)} aria-label={`Remove invitation for ${invitation.email}`}>{removingId === invitation.id ? "Removing…" : "Remove"}</Button>}
+            {isRemovableInvitation(invitation) && <Button variant="ghost" icon="x" className="invitation-remove" onClick={() => void removeInvitation(invitation)} disabled={Boolean(removingId)} aria-label={`Remove invitation for ${invitation.email}`}>{removingId === invitation.id ? "Removing…" : "Remove"}</Button>}
           </div>;
         })}
       </Panel>

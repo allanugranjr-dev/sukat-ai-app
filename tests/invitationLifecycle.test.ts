@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { invitationState, isRevocableInvitation } from "../src/lib/invitationLifecycle";
+import { invitationState, isRemovableInvitation, isRevocableInvitation } from "../src/lib/invitationLifecycle";
 
 const activeExpiry = "2026-09-01T00:00:00.000Z";
 const now = Date.parse("2026-08-31T00:00:00.000Z");
@@ -21,5 +21,10 @@ describe("invitation lifecycle", () => {
     expect(invitationState(accepted, now)).toBe("Accepted");
     expect(invitationState(revoked, now)).toBe("Revoked");
     expect(invitationState(expired, now)).toBe("Expired");
+  });
+
+  it("allows removing old unaccepted invitation rows from the log", () => {
+    expect(isRemovableInvitation({ accepted_at: null })).toBe(true);
+    expect(isRemovableInvitation({ accepted_at: "2026-08-30T00:00:00.000Z" })).toBe(false);
   });
 });

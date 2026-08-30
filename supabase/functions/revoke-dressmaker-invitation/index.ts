@@ -9,7 +9,7 @@ function isUuid(value: string): boolean {
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return optionsResponse();
-  if (request.method !== "POST") return jsonResponse({ error: "Use POST to revoke an invitation." }, 405);
+  if (request.method !== "POST") return jsonResponse({ error: "Use POST to remove an invitation." }, 405);
   try {
     const client = adminClient();
     const user = await requireUser(request, client);
@@ -34,23 +34,14 @@ Deno.serve(async (request) => {
       .maybeSingle();
     if (invitationError) return jsonResponse({ error: invitationError.message }, 400);
     if (!invitation) return jsonResponse({ error: "Invitation not found." }, 404);
-    if (invitation.accepted_at) return jsonResponse({ error: "Accepted invitations cannot be revoked." }, 409);
-    if (invitation.revoked_at) return jsonResponse({ revoked: false, already_revoked: true });
-    const expiresAt = new Date(invitation.expires_at).getTime();
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return jsonResponse({ error: "Expired invitations cannot be revoked. Send a new invitation." }, 400);
-    const now = new Date().toISOString();
+    if (invitation.accepted_at) return jsonResponse({ error: "Accepted invitations cannot be removed." }, 409);
 
-    const { data: revokedInvitation, error: revokeError } = await client
+    const { error: removeError } = await client
       .from("dressmaker_invitations")
-      .update({ revoked_at: now })
+      .delete()
       .eq("id", invitationId)
-      .is("accepted_at", null)
-      .is("revoked_at", null)
-      .gt("expires_at", now)
-      .select("id, revoked_at")
-      .maybeSingle();
-    if (revokeError) return jsonResponse({ error: revokeError.message }, 400);
-    if (revokedInvitation) return jsonResponse({ revoked: true, revoked_at: revokedInvitation.revoked_at });
+      .is("accepted_at", null);
+    if (removeError) return jsonResponse({ error: removeError.message }, 400);
 
     const { data: current, error: currentError } = await client
       .from("dressmaker_invitations")
@@ -58,10 +49,9 @@ Deno.serve(async (request) => {
       .eq("id", invitationId)
       .maybeSingle();
     if (currentError) return jsonResponse({ error: currentError.message }, 400);
-    if (current?.revoked_at) return jsonResponse({ revoked: false, already_revoked: true });
-    if (current?.accepted_at) return jsonResponse({ error: "Accepted invitations cannot be revoked." }, 409);
-    if (current && (!current.expires_at || new Date(current.expires_at).getTime() <= Date.now())) return jsonResponse({ error: "Expired invitations cannot be revoked. Send a new invitation." }, 400);
-    return jsonResponse({ error: "The invitation could not be revoked. Please try again." }, 409);
+    if (!current) return jsonResponse({ removed: true });
+    if (current.accepted_at) return jsonResponse({ error: "Accepted invitations cannot be removed." }, 409);
+    return jsonResponse({ error: "The invitation could not be removed. Please try again." }, 409);
   } catch (error) {
     return jsonResponse({ error: error instanceof Error ? error.message : "Invitation revocation failed." }, error instanceof AuthRequiredError ? 401 : 500);
   }

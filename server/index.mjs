@@ -930,18 +930,15 @@ async function handleAction(req, res) {
       if (!isUuid(invitationId)) throw new ApiError("A valid invitation ID is required.", 400);
       const invitation = await row("SELECT id, accepted_at, revoked_at, expires_at, (expires_at <= UTC_TIMESTAMP()) AS is_expired FROM dressmaker_invitations WHERE id = ? LIMIT 1", [invitationId]);
       if (!invitation) throw new ApiError("Invitation not found.", 404);
-      if (invitation.accepted_at) throw new ApiError("Accepted invitations cannot be revoked.", 409);
-      if (invitation.revoked_at) return sendData(res, { revoked: false, already_revoked: true });
-      if (Number(invitation.is_expired) === 1) throw new ApiError("Expired invitations cannot be revoked. Send a new invitation.", 400);
-      const update = await execute("UPDATE dressmaker_invitations SET revoked_at = UTC_TIMESTAMP() WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()", [invitationId]);
-      if (update.affectedRows === 0) {
-        const current = await row("SELECT accepted_at, revoked_at, expires_at, (expires_at <= UTC_TIMESTAMP()) AS is_expired FROM dressmaker_invitations WHERE id = ? LIMIT 1", [invitationId]);
-        if (current?.revoked_at) return sendData(res, { revoked: false, already_revoked: true });
-        if (current?.accepted_at) throw new ApiError("Accepted invitations cannot be revoked.", 409);
-        if (Number(current?.is_expired) === 1) throw new ApiError("Expired invitations cannot be revoked. Send a new invitation.", 400);
-        throw new ApiError("The invitation could not be revoked. Please try again.", 409);
+      if (invitation.accepted_at) throw new ApiError("Accepted invitations cannot be removed.", 409);
+      const remove = await execute("DELETE FROM dressmaker_invitations WHERE id = ? AND accepted_at IS NULL", [invitationId]);
+      if (remove.affectedRows === 0) {
+        const current = await row("SELECT accepted_at FROM dressmaker_invitations WHERE id = ? LIMIT 1", [invitationId]);
+        if (current?.accepted_at) throw new ApiError("Accepted invitations cannot be removed.", 409);
+        if (!current) return sendData(res, { removed: true, already_removed: true });
+        throw new ApiError("The invitation could not be removed. Please try again.", 409);
       }
-      return sendData(res, { revoked: true });
+      return sendData(res, { removed: true });
     }
 
     case "invite_dressmaker": {

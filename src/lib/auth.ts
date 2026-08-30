@@ -235,8 +235,8 @@ export async function revokeDressmakerInvitation(invitationId: string): Promise<
     body: { invitation_id: id },
   });
   if (error) throw new Error(await readableFunctionError(error));
-  const payload = data as { revoked?: boolean; already_revoked?: boolean } | null;
-  if (!payload?.revoked && !payload?.already_revoked) {
+  const payload = data as { removed?: boolean; already_removed?: boolean; revoked?: boolean; already_revoked?: boolean } | null;
+  if (!payload?.removed && !payload?.already_removed && !payload?.revoked && !payload?.already_revoked) {
     throw new Error("The invitation service returned an incomplete response.");
   }
 }

@@ -710,21 +710,18 @@ try {
             $statement->execute([$invitationId]);
             $invitation = $statement->fetch() ?: null;
             if (!$invitation) throw new SukatApiException('Invitation not found.', 404);
-            if ($invitation['accepted_at'] !== null) throw new SukatApiException('Accepted invitations cannot be revoked.', 409);
-            if ($invitation['revoked_at'] !== null) jsonResponse(['revoked' => false, 'already_revoked' => true]);
-            if ((int) $invitation['is_expired'] === 1) throw new SukatApiException('Expired invitations cannot be revoked. Send a new invitation.', 400);
-            $statement = database()->prepare('UPDATE dressmaker_invitations SET revoked_at = NOW() WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()');
+            if ($invitation['accepted_at'] !== null) throw new SukatApiException('Accepted invitations cannot be removed.', 409);
+            $statement = database()->prepare('DELETE FROM dressmaker_invitations WHERE id = ? AND accepted_at IS NULL');
             $statement->execute([$invitationId]);
             if ($statement->rowCount() === 0) {
-                $statement = database()->prepare('SELECT accepted_at, revoked_at, expires_at, expires_at <= NOW() AS is_expired FROM dressmaker_invitations WHERE id = ? LIMIT 1');
+                $statement = database()->prepare('SELECT accepted_at FROM dressmaker_invitations WHERE id = ? LIMIT 1');
                 $statement->execute([$invitationId]);
                 $current = $statement->fetch() ?: null;
-                if ($current && $current['revoked_at'] !== null) jsonResponse(['revoked' => false, 'already_revoked' => true]);
-                if ($current && $current['accepted_at'] !== null) throw new SukatApiException('Accepted invitations cannot be revoked.', 409);
-                if ($current && (int) $current['is_expired'] === 1) throw new SukatApiException('Expired invitations cannot be revoked. Send a new invitation.', 400);
-                throw new SukatApiException('The invitation could not be revoked. Please try again.', 409);
+                if ($current && $current['accepted_at'] !== null) throw new SukatApiException('Accepted invitations cannot be removed.', 409);
+                if (!$current) jsonResponse(['removed' => true, 'already_removed' => true]);
+                throw new SukatApiException('The invitation could not be removed. Please try again.', 409);
             }
-            jsonResponse(['revoked' => true]);
+            jsonResponse(['removed' => true]);
         }
 
         case 'invite_dressmaker': {
