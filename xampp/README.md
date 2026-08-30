@@ -48,4 +48,4 @@ npm run dev:xampp
 
 For the normal XAMPP deployment, no extra environment file is needed because the API URL is resolved relative to the installed app directory.
 
-The XAMPP process_scan action uses the same deterministic local demo result and interactive 3D reference model as local Supabase development. It does not call an external Imagen or reconstruction provider.
+The XAMPP `process_scan` action uses the same deterministic local demo result and the `public/media/3d-body-scan-reference-v2.png` reference visual as local Supabase development. It does not call an external Imagen or reconstruction provider, and the procedural result is not a personalized scan.

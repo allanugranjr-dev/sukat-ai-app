@@ -932,9 +932,7 @@ function ScanActivity({ scan }: { scan: Scan }) {
 
 type LocalPreviewData = {
   kind?: unknown;
-  generated_image?: unknown;
-  poster?: unknown;
-  mobile_poster?: unknown;
+  reference_image?: unknown;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -949,6 +947,9 @@ function localPreviewData(model: ScanBundle["bodyModel"]): LocalPreviewData | nu
 function localPreviewPath(value: unknown): string | null {
   return typeof value === "string" && value.startsWith("/media/") ? publicAssetPath(value) : null;
 }
+
+const LOCAL_REFERENCE_IMAGE = publicAssetPath("/media/3d-body-scan-reference-v2.png");
+const MODEL_UNITS_PER_CM = 4.3 / 170;
 
 function clampNumber(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
@@ -1139,7 +1140,7 @@ function addMeasuredLimb(three: ThreeModule, group: THREE.Group, start: THREE.Ve
 function addMeasuredGuideLine(three: ThreeModule, group: THREE.Group, points: THREE.Vector3[], color: number) {
   const line = new three.Line(
     new three.BufferGeometry().setFromPoints(points),
-    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.92, depthTest: false }),
+    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.96, depthTest: false, depthWrite: false }),
   );
   line.renderOrder = 4;
   line.frustumCulled = false;
@@ -1154,7 +1155,7 @@ function addMeasuredEllipseGuide(three: ThreeModule, group: THREE.Group, center:
   }
   const line = new three.LineLoop(
     new three.BufferGeometry().setFromPoints(points),
-    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false }),
+    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.98, depthTest: false, depthWrite: false }),
   );
   line.renderOrder = 4;
   line.frustumCulled = false;
@@ -1173,7 +1174,7 @@ function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: TH
   }
   const line = new three.LineLoop(
     new three.BufferGeometry().setFromPoints(points),
-    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false }),
+    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.98, depthTest: false, depthWrite: false }),
   );
   line.renderOrder = 4;
   line.frustumCulled = false;
@@ -1187,7 +1188,7 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
   const bodyMaterial = new three.MeshStandardMaterial({ color: 0xc2d2e8, roughness: 0.44, metalness: 0.02, emissive: 0x162844, emissiveIntensity: 0.2 });
   const jointMaterial = new three.MeshStandardMaterial({ color: 0xa8bddc, roughness: 0.52, metalness: 0.02, emissive: 0x10213b, emissiveIntensity: 0.15 });
   const featureMaterial = new three.MeshStandardMaterial({ color: 0x17253a, roughness: 0.34, metalness: 0.02 });
-  const modelUnitsPerCm = 4.3 / 170;
+  const modelUnitsPerCm = MODEL_UNITS_PER_CM;
   const heightCm = clampNumber(modelHeightCm(heightValue, heightUnit), 120, 230);
   const height = heightCm * modelUnitsPerCm;
   const chestCm = modelMeasurementCm(measurements, ["chest", "bust"], 100.1);
@@ -1321,7 +1322,7 @@ function disposeThreeScene(scene: THREE.Scene) {
   });
 }
 
-function InteractiveBodyModel({ generatedImage, measurements = [], heightValue = null, heightUnit = "cm" }: { generatedImage: string; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin" }) {
+function InteractiveBodyModel({ referenceImage, measurements = [], heightValue = null, heightUnit = "cm" }: { referenceImage: string; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin" }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controlsRef = useRef<OrbitControlsType | null>(null);
   const guidesRef = useRef<THREE.Group | null>(null);
@@ -1377,18 +1378,20 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
         renderer.setClearColor(0x07111f, 1);
         scene = new three.Scene();
         scene.fog = new three.Fog(0x07111f, 8, 15);
+        const modelHeight = clampNumber(modelHeightCm(heightValue, heightUnit), 120, 230) * MODEL_UNITS_PER_CM;
+        const frameDistance = clampNumber(modelHeight * 1.65, 4.75, 10.75);
         const camera = new three.PerspectiveCamera(35, 1, 0.1, 100);
-        camera.position.set(0, 2.15, 7);
+        camera.position.set(0, modelHeight * 0.52, frameDistance);
         controls = new runtime.OrbitControls(camera, canvas);
         controls.enableDamping = true;
         controls.enablePan = false;
         controls.enableZoom = true;
         controls.zoomSpeed = 0.75;
-        controls.minDistance = 4.25;
-        controls.maxDistance = 9;
+        controls.minDistance = clampNumber(modelHeight * 0.88, 3.75, 5.1);
+        controls.maxDistance = clampNumber(modelHeight * 2.15, 8.5, 13);
         controls.minPolarAngle = Math.PI * 0.28;
         controls.maxPolarAngle = Math.PI * 0.68;
-        controls.target.set(0, 2.1, 0);
+        controls.target.set(0, modelHeight * 0.5, 0);
         controls.autoRotate = autoRotate && !reducedMotionRef.current;
         controls.autoRotateSpeed = 0.8;
         controlsRef.current = controls;
@@ -1421,15 +1424,16 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
           const height = Math.max(300, host.clientHeight);
           camera.aspect = width / height;
           camera.updateProjectionMatrix();
-          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, /Mobi|Android/i.test(navigator.userAgent) ? 1.15 : 1.5));
+          const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.5));
           renderer.setSize(width, height, false);
         };
         const renderFrame = () => {
           if (!active || document.hidden || !renderer || !scene || !controls) return;
-          controls.update();
+          const changed = controls.update();
           renderer.render(scene, camera);
           frame = 0;
-          if (controls.autoRotate && !reducedMotionRef.current) frame = window.requestAnimationFrame(renderFrame);
+          if ((controls.autoRotate && !reducedMotionRef.current) || changed) frame = window.requestAnimationFrame(renderFrame);
         };
         const requestRender = () => {
           if (!active || document.hidden || frame !== 0) return;
@@ -1458,6 +1462,12 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
         requestRender();
         setViewerState("ready");
       } catch {
+        controls?.dispose();
+        controls = null;
+        if (scene) disposeThreeScene(scene);
+        scene = null;
+        renderer?.dispose();
+        renderer = null;
         if (active) setViewerState("fallback");
       }
     };
@@ -1510,7 +1520,7 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
   const zoomOut = () => { controlsRef.current?.dollyOut(1.12); controlsRef.current?.update(); renderRequestRef.current?.(); };
   const modelHeightLabel = heightValue === null || heightValue === undefined ? "170 cm reference height" : `${modelHeightCm(heightValue, heightUnit).toFixed(1)} cm tall`;
 
-  return <div className="model-3d-viewer"><div className="model-3d-stage" aria-busy={viewerState === "loading"}><canvas ref={canvasRef} tabIndex={0} aria-label="Interactive measurement-driven 3D body model" aria-describedby={instructionsId} onKeyDown={handleCanvasKeyDown} /><figure className="model-3d-reference"><img src={generatedImage} alt="" /><figcaption>Reference visual</figcaption></figure><div className="model-3d-scale" aria-label="Model scale summary"><strong>MEASURED PROPORTIONS</strong><span>{modelHeightLabel}</span><small>{measurements.length} result values mapped to the body</small></div>{viewerState === "loading" && <div className="model-3d-loading" role="status" aria-live="polite"><span className="model-3d-spinner" />Preparing measured body model…</div>}{viewerState === "fallback" && <div className="model-3d-fallback"><img src={generatedImage} alt="Reference visualization for the body measurement result" /><span>Interactive 3D is unavailable on this device. Showing the reference visual.</span></div>}<span className="model-preview-badge"><Icon name="scan" size={13} /> Measured body · interactive 3D</span></div><div className="model-3d-controls" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div><p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Drag to rotate · scroll or pinch to zoom · focus the model and use arrow keys, +/−, or Home</p>{reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}</div>;
+  return <div className="model-3d-viewer"><div className="model-3d-stage" aria-busy={viewerState === "loading"}><canvas ref={canvasRef} tabIndex={0} aria-label="Interactive measurement-driven 3D body model" aria-describedby={instructionsId} onKeyDown={handleCanvasKeyDown} /><figure className="model-3d-reference"><img src={referenceImage} alt="" /><figcaption>Reference visual</figcaption></figure><div className="model-3d-scale" aria-label="Model scale summary"><strong>MEASURED PROPORTIONS</strong><span>{modelHeightLabel}</span><small>{measurements.length} result values mapped to the body</small></div>{viewerState === "loading" && <div className="model-3d-loading" role="status" aria-live="polite"><span className="model-3d-spinner" />Preparing measured body model…</div>}{viewerState === "fallback" && <div className="model-3d-fallback"><img src={referenceImage} alt="Reference visualization for the body measurement result" /><span>Interactive 3D is unavailable on this device. Showing the reference visual.</span></div>}<span className="model-preview-badge"><Icon name="scan" size={13} /> Measured body · interactive 3D</span></div><div className="model-3d-controls" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div><p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Drag to rotate · scroll or pinch to zoom · focus the model and use arrow keys, +/−, or Home</p>{reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}</div>;
 }
 
 function ModelViewer({ model, measurements = [], heightValue = null, heightUnit = "cm" }: { model: ScanBundle["bodyModel"]; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin" }) {
@@ -1529,10 +1539,10 @@ function ModelViewer({ model, measurements = [], heightValue = null, heightUnit 
     return () => { active = false; };
   }, [model?.id, model?.status, model?.model_url_or_path]);
   if (localPreview) {
-    const generatedImage = publicAssetPath("/media/3d-body-scan-reference-v2.png");
-    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel generatedImage={generatedImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN MODEL</p><h3>Real proportions, mapped from the result</h3><p>The body shape uses the returned height and measurements in centimetres, and each visible guide follows the matching circumference or length. This is a visual fit model, not a scan-grade mesh; local demo values must be verified by a dressmaker.</p><Badge tone="warning">Measured visualization · verify before tailoring</Badge></div></div></div>;
+    const referenceImage = localPreviewPath(localPreview.reference_image) ?? LOCAL_REFERENCE_IMAGE;
+    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel referenceImage={referenceImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN MODEL</p><h3>Human-shaped reference, mapped from the result</h3><p>The body shape uses the returned height and measurements in centimetres, and each visible guide follows the matching circumference or length. This is a visual fit model, not a scan-grade mesh; local demo values must be verified by a dressmaker.</p><Badge tone="warning">Measured visualization · verify before tailoring</Badge></div></div></div>;
   }
-  if (!model || model.status !== "ready" || !model.model_url_or_path || assetError) return <div className="model-empty model-empty-preview"><InteractiveBodyModel generatedImage={publicAssetPath("/media/3d-body-scan-reference-v2.png")} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN PREVIEW</p><h3>Interactive 3D body model</h3><p>{assetError || "A human-form model is proportioned from the returned measurements while a provider-specific mesh is unavailable."}</p><Badge tone="teal">Result values mapped to guides</Badge></div></div></div>;
+  if (!model || model.status !== "ready" || !model.model_url_or_path || assetError) return <div className="model-empty model-empty-preview"><InteractiveBodyModel referenceImage={LOCAL_REFERENCE_IMAGE} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN PREVIEW</p><h3>Interactive 3D body model</h3><p>{assetError || "A human-shaped reference model is proportioned from the returned measurements while a provider-specific mesh is unavailable."}</p><Badge tone="teal">Result values mapped to guides</Badge></div></div></div>;
   return <div className="model-ready"><span className="model-empty-icon"><Icon name="expand" size={27} /></span><h3>{assetUrl ? "Body model asset available" : "Opening private model asset…"}</h3><p>The provider returned a model asset for authorized review.</p>{assetUrl && <a className="button button-secondary" href={assetUrl} target="_blank" rel="noreferrer">Open model asset <Icon name="external" size={15} /></a>}</div>;
 }
 

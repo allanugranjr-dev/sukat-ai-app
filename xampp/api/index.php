@@ -1062,10 +1062,8 @@ try {
             }
             $previewData = json_encode([
                 'kind' => 'local-reference-3d-body-scan',
-                'generated_image' => '/media/3d-body-scan-reference-v2.png',
-                'poster' => '/media/3d-body-scan-reference-v2.png',
-                'mobile_poster' => '/media/3d-body-scan-reference-v2.png',
-                'source' => 'generated image reference',
+                'reference_image' => '/media/3d-body-scan-reference-v2.png',
+                'source' => 'local reference image; not a personalized scan',
             ], JSON_UNESCAPED_SLASHES);
             $statement = database()->prepare('INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)');
             $statement->execute([uuid(), $scan['id'], 'local', 'local-reference-3d-body-scan', $previewData, 'ready']);

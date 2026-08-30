@@ -714,10 +714,8 @@ async function processScanJob(scanId) {
     const penalty = current.height_value === null ? 10 : 0;
     const previewData = {
       kind: "local-reference-3d-body-scan",
-      generated_image: "/media/3d-body-scan-reference-v2.png",
-      poster: "/media/3d-body-scan-reference-v2.png",
-      mobile_poster: "/media/3d-body-scan-reference-v2.png",
-      source: "generated image reference",
+      reference_image: "/media/3d-body-scan-reference-v2.png",
+      source: "local reference image; not a personalized scan",
     };
 
     await transaction(async (connection) => {
