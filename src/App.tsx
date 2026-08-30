@@ -55,6 +55,7 @@ import {
   updateScan,
 } from "./lib/data";
 import { isHeightValid, previousScanPosition, scanSteps, type ScanStep, validateUpload } from "./lib/scanFlow";
+import { modelHeightCm, modelMeasurementCm } from "./lib/measurementMapping";
 import { requestScanProcessing, processingCopy } from "./lib/reconstructionProvider";
 import { createSignedStorageUrl, deleteScanAsset, uploadScanAsset } from "./lib/storage";
 import { subscribeToNodeScan } from "./lib/nodeApi";
@@ -1076,38 +1077,6 @@ function createBodyModelScene(three: ThreeModule, measurements: Measurement[], h
 
 type MeasuredBodyRing = { y: number; width: number; depth: number; x?: number; z?: number };
 
-function normalizeModelMeasurementKey(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-}
-
-function findModelMeasurement(measurements: Measurement[], aliases: string[]): Measurement | undefined {
-  const normalizedAliases = aliases.map(normalizeModelMeasurementKey);
-  return measurements.find((measurement) => {
-    const key = normalizeModelMeasurementKey(measurement.key);
-    const keyTokens = key.split("_");
-    return normalizedAliases.some((alias) => {
-      const aliasTokens = alias.split("_");
-      return key === alias
-        || key.startsWith(`${alias}_`)
-        || key.endsWith(`_${alias}`)
-        || aliasTokens.every((token) => keyTokens.includes(token));
-    });
-  });
-}
-
-function modelMeasurementCm(measurements: Measurement[], aliases: string[], fallback: number): number {
-  const measurement = findModelMeasurement(measurements, aliases);
-  const value = Number(measurement?.adjusted_value ?? measurement?.value);
-  if (!measurement || !Number.isFinite(value) || value <= 0) return fallback;
-  return measurement.unit === "in" ? value * 2.54 : value;
-}
-
-function modelHeightCm(heightValue: number | null | undefined, heightUnit: "cm" | "ftin"): number {
-  const value = Number(heightValue);
-  if (heightValue === null || heightValue === undefined || !Number.isFinite(value) || value <= 0) return 170;
-  return heightUnit === "ftin" ? value * 2.54 : value;
-}
-
 function ellipseRadiiForCircumference(circumferenceCm: number, depthRatio: number, modelUnitsPerCm: number): [number, number] {
   const perimeterForUnitWidth = Math.PI * (3 * (1 + depthRatio) - Math.sqrt((3 + depthRatio) * (1 + 3 * depthRatio)));
   const widthRadiusCm = circumferenceCm / perimeterForUnitWidth;
@@ -1398,6 +1367,11 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
         if (!active) return;
         const { three } = runtime;
         renderer = new three.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
+        const handleContextLost = (event: Event) => {
+          event.preventDefault();
+          if (frame) { window.cancelAnimationFrame(frame); frame = 0; }
+          if (active) setViewerState("fallback");
+        };
         renderer.outputColorSpace = three.SRGBColorSpace;
         renderer.shadowMap.enabled = false;
         renderer.setClearColor(0x07111f, 1);
@@ -1473,14 +1447,16 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
         };
         window.addEventListener("resize", onWindowResize);
         document.addEventListener("visibilitychange", onVisibilityChange);
-        requestRender();
-        setViewerState("ready");
         cleanupRuntime = () => {
           window.removeEventListener("resize", onWindowResize);
           document.removeEventListener("visibilitychange", onVisibilityChange);
+          canvas.removeEventListener("webglcontextlost", handleContextLost, false);
           observer?.disconnect();
           controls?.removeEventListener("change", requestRender);
         };
+        canvas.addEventListener("webglcontextlost", handleContextLost, false);
+        requestRender();
+        setViewerState("ready");
       } catch {
         if (active) setViewerState("fallback");
       }

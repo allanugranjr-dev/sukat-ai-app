@@ -18,6 +18,7 @@ describe("scan flow guardrails", () => {
 
   it("only accepts supported, reasonably sized uploads", () => {
     expect(validateUpload({ type: "image/jpeg", size: 1024 }).valid).toBe(true);
+    expect(validateUpload({ type: "IMAGE/PNG", size: 10 * 1024 * 1024 }).valid).toBe(true);
     expect(validateUpload({ type: "image/gif", size: 1024 }).valid).toBe(false);
     expect(validateUpload({ type: "image/png", size: 11 * 1024 * 1024 }).valid).toBe(false);
   });

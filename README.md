@@ -33,7 +33,7 @@ SukatAI is a measurement workspace for customers, dressmakers, and administrator
 
    The default `dev` and `build` scripts use Node mode, so the app does not show the Supabase setup screen. Use `npm run dev:supabase` or `npm run build:supabase` only for the optional Supabase runtime.
 
-For the optional Supabase runtime, copy `.env.example` to `.env.local` and fill in the two public Supabase values. The service-role and reconstruction values are server-side secrets and must not be exposed to Vite.
+For the optional Supabase runtime, copy `.env.example` to `.env.local` and fill in the two public Supabase values. The service-role and reconstruction values are server-side secrets and must not be exposed to Vite. `VITE_BACKEND_MODE`, `VITE_NODE_API_URL`, and `VITE_XAMPP_API_URL` are optional browser-side overrides; do not put credentials in them.
 
    ```dotenv
    NEXT_PUBLIC_SUPABASE_URL=
@@ -201,7 +201,7 @@ npm test
 npm run build
 ```
 
-The tests cover scan navigation and upload/height guardrails. The production boundary is enforced by Supabase RLS, private Storage policies, and server-side Edge Function secrets.
+The tests cover scan navigation, upload/height guardrails, and measurement-to-model mapping. The production boundary is enforced by Supabase RLS, private Storage policies, and server-side Edge Function secrets. Before a release, run `npm run typecheck`, `npm test`, and the build command for the selected runtime (`npm run build:node`, `npm run build:supabase`, or `npm run build:xampp`).
 
 ## Project layout
 
