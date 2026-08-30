@@ -203,7 +203,7 @@ export async function inviteDressmaker(input: {
 }
 
 export async function acceptDressmakerInvitation(input: {
-  token: string;
+  token?: string;
   firstName: string;
   lastName: string;
 }): Promise<void> {

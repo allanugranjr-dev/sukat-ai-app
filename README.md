@@ -69,6 +69,10 @@ supabase secrets set INVITATION_ALLOWED_ORIGINS=https://your-frontend.example.co
 
 `INVITATION_ALLOWED_ORIGINS` is required by the invitation function and accepts a comma-separated list of exact frontend origins. Keep it server-side; it prevents invitation links from redirecting to an untrusted site.
 
+For a hosted Supabase project, also open **Authentication → URL Configuration** and set the **Site URL** to `https://sukat-ai-app.vercel.app`. Add `https://sukat-ai-app.vercel.app/**` to the redirect allow list. If the hosted **Invite user** email template was customized, make its button link `{{ .ConfirmationURL }}`; do not hard-code `{{ .SiteURL }}` or a localhost URL. The template in `supabase/templates/invite.html` is the reference version. These hosted settings are separate from the local `supabase/config.toml` file.
+
+Invitation emails already sent cannot be repaired because their redirect is embedded in the existing message. Create a new invitation after changing the hosted settings.
+
 The migration creates:
 
 - `profiles`, `organizations`, and `dressmaker_invitations`

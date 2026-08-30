@@ -14,11 +14,15 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: "Request body must be valid JSON." }, 400);
     }
     const token = body.token?.trim() ?? "";
+    const invitationId = typeof user.user_metadata?.invitation_id === "string" ? user.user_metadata.invitation_id.trim() : "";
     const firstName = body.firstName?.trim() ?? "";
     const lastName = body.lastName?.trim() ?? "";
-    if (!token || !firstName || !lastName || firstName.length > 80 || lastName.length > 80) return jsonResponse({ error: "Invitation token and name are required." }, 400);
+    if ((!token && !invitationId) || !firstName || !lastName || firstName.length > 80 || lastName.length > 80) return jsonResponse({ error: "Open the invitation link again, then enter your name." }, 400);
 
-    const { data: invitation, error: invitationError } = await client.from("dressmaker_invitations").select("*").eq("token_hash", await sha256(token)).maybeSingle();
+    const invitationQuery = client.from("dressmaker_invitations").select("*");
+    const { data: invitation, error: invitationError } = token
+      ? await invitationQuery.eq("token_hash", await sha256(token)).maybeSingle()
+      : await invitationQuery.eq("id", invitationId).maybeSingle();
     if (invitationError || !invitation) return jsonResponse({ error: "This invitation is invalid or has already been used." }, 400);
     if (invitation.accepted_at || invitation.revoked_at || new Date(invitation.expires_at).getTime() <= Date.now()) return jsonResponse({ error: "This invitation is no longer active." }, 400);
     if (user.email?.toLowerCase() !== invitation.email.toLowerCase()) return jsonResponse({ error: "Sign in with the email address that received this invitation." }, 403);
