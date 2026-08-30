@@ -1033,6 +1033,11 @@ body { background: var(--workspace); }
 .measurement-highlight > em { align-items: center; color: var(--teal-dark); display: flex; font-size: 10px; font-style: normal; font-weight: 700; gap: 5px; margin-top: 2px; }
 .measurement-row.selected th, .measurement-row.selected td { background: #eaf8f6; }
 .measurement-row.selected .table-accent { background: #d49a1d; }
+.measurement-row[data-selectable="true"] { cursor: pointer; outline: none; }
+.measurement-row[data-selectable="true"]:hover th, .measurement-row[data-selectable="true"]:hover td { background: #eaf8f6; }
+.measurement-row[data-selectable="true"]:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+.measurement-row[data-selectable="true"] .table-accent { transition: background-color .16s ease, height .16s ease; }
+.measurement-row[data-selectable="true"].selected .table-accent { height: 22px; }
 .results-tabs button { color: #64748b; }
 .results-tabs button.active { color: var(--teal-dark); }
 
