@@ -43,6 +43,7 @@ export const config = {
     "http://localhost:3001",
   ]),
   cookieSecure: process.env.SUKATAI_COOKIE_SECURE === "true",
+  cookieSameSite: process.env.SUKATAI_COOKIE_SAMESITE === "None" ? "None" : "Lax",
 };
 
 export function safeDatabaseIdentifier(value) {

@@ -323,7 +323,7 @@ function setSessionCookie(res, token) {
     `${sessionCookieName}=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Lax",
+    `SameSite=${config.cookieSameSite}`,
     `Max-Age=${config.sessionHours * 60 * 60}`,
   ];
   if (config.cookieSecure) attributes.push("Secure");
@@ -331,7 +331,7 @@ function setSessionCookie(res, token) {
 }
 
 function clearSessionCookie(res) {
-  const attributes = [`${sessionCookieName}=`, "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"];
+  const attributes = [`${sessionCookieName}=`, "Path=/", "HttpOnly", `SameSite=${config.cookieSameSite}`, "Max-Age=0"];
   if (config.cookieSecure) attributes.push("Secure");
   res.setHeader("Set-Cookie", attributes.join("; "));
 }
