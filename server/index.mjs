@@ -714,9 +714,9 @@ async function processScanJob(scanId) {
     const penalty = current.height_value === null ? 10 : 0;
     const previewData = {
       kind: "local-reference-3d-body-scan",
-      generated_image: "/media/3d-body-scan-generated.png",
-      poster: "/media/3d-body-scan-desktop.jpg",
-      mobile_poster: "/media/3d-body-scan-mobile.jpg",
+      generated_image: "/media/3d-body-scan-reference-v2.png",
+      poster: "/media/3d-body-scan-reference-v2.png",
+      mobile_poster: "/media/3d-body-scan-reference-v2.png",
       source: "generated image reference",
     };
 
@@ -1168,7 +1168,7 @@ async function handleAction(req, res) {
       const user = await requireUser(req);
       const bucket = stringInput(data, "bucket", "") ?? "";
       const assetPath = stringInput(data, "path", "") ?? "";
-      if (bucket === "body-models" && assetPath === "local-reference-3d-body-scan") return sendData(res, publicAssetUrl(req, "media/3d-body-scan-generated.png"));
+      if (bucket === "body-models" && assetPath === "local-reference-3d-body-scan") return sendData(res, publicAssetUrl(req, "media/3d-body-scan-reference-v2.png"));
       if (bucket === "scan-captures") {
         const asset = await row("SELECT a.*, s.customer_id, s.organization_id FROM scan_assets a JOIN scans s ON s.id = a.scan_id WHERE a.storage_path = ? LIMIT 1", [assetPath]);
         if (!asset) throw new ApiError("Stored asset was not found.", 404);

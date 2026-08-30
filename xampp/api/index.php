@@ -986,7 +986,7 @@ try {
             $bucket = stringInput($data, 'bucket', '') ?? '';
             $path = stringInput($data, 'path', '') ?? '';
             if ($bucket === 'body-models' && $path === 'local-reference-3d-body-scan') {
-                jsonResponse(publicAssetUrl('media/3d-body-scan-generated.png'));
+                jsonResponse(publicAssetUrl('media/3d-body-scan-reference-v2.png'));
             }
             if ($bucket === 'scan-captures') {
                 $statement = database()->prepare('SELECT a.*, s.customer_id, s.organization_id FROM scan_assets a JOIN scans s ON s.id = a.scan_id WHERE a.storage_path = ? LIMIT 1');
@@ -1062,9 +1062,9 @@ try {
             }
             $previewData = json_encode([
                 'kind' => 'local-reference-3d-body-scan',
-                'generated_image' => '/media/3d-body-scan-generated.png',
-                'poster' => '/media/3d-body-scan-desktop.jpg',
-                'mobile_poster' => '/media/3d-body-scan-mobile.jpg',
+                'generated_image' => '/media/3d-body-scan-reference-v2.png',
+                'poster' => '/media/3d-body-scan-reference-v2.png',
+                'mobile_poster' => '/media/3d-body-scan-reference-v2.png',
                 'source' => 'generated image reference',
             ], JSON_UNESCAPED_SLASHES);
             $statement = database()->prepare('INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)');
