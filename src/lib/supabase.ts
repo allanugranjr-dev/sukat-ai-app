@@ -44,6 +44,9 @@ export function publicAppOrigin(): string {
       // Fall back to the current origin when a deployment variable is malformed.
     }
   }
+  if (window.location.hostname === "sukat-ai-app.vercel.app" || window.location.hostname.endsWith(".vercel.app")) {
+    return "https://sukat-ai-app.vercel.app";
+  }
   return window.location.origin;
 }
 
