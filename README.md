@@ -1,12 +1,12 @@
 # SukatAI
 
-SukatAI is a Supabase-backed measurement workspace for customers, dressmakers, and administrators. Customers create private scans from front, side, and back photos. A configured reconstruction provider may return validated measurements and a body-model asset; dressmakers review those results before they can be used for an order.
+SukatAI is a measurement workspace for customers, dressmakers, and administrators. Customers create private scans from front, side, and back photos. The primary local runtime is Node.js + MariaDB + Socket.IO; Supabase remains an optional hosted runtime.
 
 ## Requirements
 
 - Node.js 20 or newer
-- A Supabase project
-- Supabase CLI, when applying migrations or deploying Edge Functions
+- XAMPP MariaDB, when using the Node.js local runtime
+- A Supabase project and CLI only when using the optional Supabase runtime
 - A reconstruction provider is optional for local development; the local deterministic simulator is used by default
 
 ## Run the application
@@ -17,7 +17,23 @@ SukatAI is a Supabase-backed measurement workspace for customers, dressmakers, a
    npm install
    ```
 
-2. Copy `.env.example` to `.env.local` and fill in the two public Supabase values. The service-role and reconstruction values are server-side secrets and must not be exposed to Vite.
+2. Start MariaDB in XAMPP, then initialize the Node schema and start the API:
+
+   ```bash
+   npm run node:setup
+   npm run build:node
+   npm run start:node
+   ```
+
+3. In a second terminal, start the Vite frontend:
+
+   ```bash
+   npm run dev
+   ```
+
+   The default `dev` and `build` scripts use Node mode, so the app does not show the Supabase setup screen. Use `npm run dev:supabase` or `npm run build:supabase` only for the optional Supabase runtime.
+
+For the optional Supabase runtime, copy `.env.example` to `.env.local` and fill in the two public Supabase values. The service-role and reconstruction values are server-side secrets and must not be exposed to Vite.
 
    ```dotenv
    NEXT_PUBLIC_SUPABASE_URL=
@@ -27,14 +43,6 @@ SukatAI is a Supabase-backed measurement workspace for customers, dressmakers, a
    RECONSTRUCTION_API_URL=
    RECONSTRUCTION_API_KEY=
    ```
-
-3. Start the application:
-
-   ```bash
-   npm run dev
-   ```
-
-   If the public Supabase variables are missing or invalid, the application shows a setup screen and does not create an alternate account or data source.
 
 ## Supabase setup
 
