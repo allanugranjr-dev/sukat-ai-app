@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-node
+.env*
+!.env.example
+.env
+.env.local
+.env.xampp.local
+.env.node.local
+xampp/storage/*
+!xampp/storage/.htaccess
+supabase/.temp/
+supabase/.branches/
+.DS_Store
+coverage

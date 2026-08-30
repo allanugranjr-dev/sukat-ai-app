@@ -1,0 +1,1 @@
+-- SukatAI intentionally has no demo seed data.

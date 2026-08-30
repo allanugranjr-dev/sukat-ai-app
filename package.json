@@ -1,0 +1,44 @@
+{
+  "name": "sukatai",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:xampp": "vite --mode xampp",
+    "dev:node": "vite --mode node",
+    "preview": "vite preview",
+    "build": "tsc --noEmit && vite build",
+    "build:xampp": "tsc --noEmit && vite build --mode xampp",
+    "build:node": "tsc --noEmit && vite build --mode node",
+    "start:node": "node server/index.mjs",
+    "node:setup": "node server/setup-db.mjs",
+    "node:backup": "node server/backup.mjs",
+    "xampp:deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File xampp/install-xampp.ps1",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "latest",
+    "@vitejs/plugin-react": "latest",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mariadb": "^3.5.3",
+    "multer": "^2.3.0",
+    "react": "latest",
+    "react-dom": "latest",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/three": "^0.185.4",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}
