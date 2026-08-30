@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run build:node",
-  "outputDirectory": "dist-node",
+  "buildCommand": "npm run build:supabase",
+  "outputDirectory": "dist",
   "env": {
-    "VITE_BACKEND_MODE": "node"
+    "VITE_BACKEND_MODE": "supabase"
   }
 }
