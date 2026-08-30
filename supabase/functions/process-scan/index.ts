@@ -53,7 +53,7 @@ function localProviderResult(scan: ScanForLocalProvider): { measurements: Provid
       path: "local-reference-3d-body-scan",
       preview_data: {
         kind: "local-reference-3d-body-scan",
-        reference_image: "/media/3d-body-scan-reference-v2.png",
+        reference_image: "/media/3d-body-scan-reference-v3.png",
         source: "local reference image; not a personalized scan",
       },
     },

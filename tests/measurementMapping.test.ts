@@ -24,7 +24,14 @@ describe("measurement mapping for the 3D model", () => {
   it("normalizes provider keys and matches aliases by token", () => {
     const shoulder = measurement("Shoulder breadth", 52.5);
     expect(normalizeModelMeasurementKey("Shoulder breadth")).toBe("shoulder_breadth");
+    expect(normalizeModelMeasurementKey("headCircumference")).toBe("head_circumference");
     expect(findModelMeasurement([shoulder], ["shoulder"])).toBe(shoulder);
+  });
+
+  it("prefers an exact measurement over a descriptive suffix", () => {
+    const descriptive = measurement("back_to_shoulder", 21.2);
+    const shoulder = measurement("shoulder", 52.5);
+    expect(findModelMeasurement([descriptive, shoulder], ["shoulder"])).toBe(shoulder);
   });
 
   it("prefers a tailor adjustment and converts inches to centimetres", () => {
@@ -33,6 +40,7 @@ describe("measurement mapping for the 3D model", () => {
 
   it("uses safe fallbacks for missing or invalid values", () => {
     expect(modelMeasurementCm([measurement("waist", 0)], ["waist"], 82)).toBe(82);
+    expect(modelMeasurementCm([measurement("waist", 82, "cm", 0)], ["waist"], 70)).toBe(82);
     expect(modelMeasurementCm([], ["waist"], 82)).toBe(82);
     expect(modelHeightCm(null, "cm")).toBe(170);
     expect(modelHeightCm(67, "ftin")).toBeCloseTo(170.18);

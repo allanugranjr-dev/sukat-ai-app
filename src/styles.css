@@ -678,6 +678,7 @@ button:disabled { transform: none !important; }
   .invitation-row > .invite-expiry { margin-left: 40px; }
 }
 .capture-stage, .processing-visual { border-radius: 16px; }
+.capture-actions > input.sr-only:focus-visible + label { outline: 3px solid rgba(49, 88, 217, .34); outline-offset: 3px; }
 .model-empty, .model-ready { background: #f4f6fb; border-color: #d8e0ef; border-radius: 16px; box-shadow: none; }
 .model-preview-badge { background: rgba(24,38,64,.9); border-color: rgba(255,255,255,.24); }
 .results-actions { border-radius: 16px; }
@@ -817,7 +818,7 @@ body { min-width: 320px; }
 .model-3d-controls { gap: 8px; padding: 14px 15px 5px; }
 .model-3d-controls button { font-size: 12px; min-height: 40px; padding: 0 12px; transition: transform .16s var(--ease-out), background-color .18s ease, border-color .18s ease, color .18s ease; }
 .model-3d-controls button:active:not(:disabled) { transform: scale(.97); }
-.model-3d-hint { color: #53627a; font-size: 12px; line-height: 1.5; padding: 9px 15px 15px; }
+.model-3d-hint { align-items: flex-start; color: #53627a; font-size: 12px; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; padding: 9px 15px 15px; }
 .model-3d-motion-note { background: #eef2ff; color: #2342a7; font-size: 11px; line-height: 1.45; margin: 0; padding: 0 15px 14px; }
 
 .app-sidebar { width: 244px; }
