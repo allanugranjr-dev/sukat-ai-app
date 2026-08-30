@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS `users` (
   `first_name` VARCHAR(80) NOT NULL,
   `last_name` VARCHAR(80) NOT NULL,
   `email` VARCHAR(320) NOT NULL,
+  `phone` VARCHAR(32) NULL,
+  `email_notifications` TINYINT(1) NOT NULL DEFAULT 1,
+  `sms_notifications` TINYINT(1) NOT NULL DEFAULT 0,
   `password_hash` VARCHAR(255) NOT NULL,
   `avatar_url` VARCHAR(500) NULL,
   `unit_system` VARCHAR(10) NOT NULL DEFAULT 'cm',
@@ -164,9 +167,29 @@ CREATE TABLE IF NOT EXISTS `notifications` (
   `body` VARCHAR(1000) NOT NULL,
   `read_at` DATETIME NULL,
   `metadata` JSON NOT NULL,
+  `event_key` VARCHAR(180) NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `notifications_event_key_unique` (`event_key`),
   KEY `notifications_user_idx` (`user_id`, `read_at`, `created_at`)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `notification_deliveries` (
+  `id` CHAR(36) NOT NULL,
+  `notification_id` CHAR(36) NULL,
+  `user_id` CHAR(36) NULL,
+  `event_key` VARCHAR(180) NOT NULL,
+  `channel` VARCHAR(20) NOT NULL,
+  `destination` VARCHAR(320) NOT NULL,
+  `status` VARCHAR(30) NOT NULL DEFAULT 'pending',
+  `provider` VARCHAR(40) NOT NULL DEFAULT 'console',
+  `provider_message_id` VARCHAR(255) NULL,
+  `error` VARCHAR(1000) NULL,
+  `sent_at` DATETIME NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `notification_deliveries_event_channel_unique` (`event_key`, `channel`),
+  KEY `notification_deliveries_user_idx` (`user_id`, `created_at`)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS sessions (

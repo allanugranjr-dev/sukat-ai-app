@@ -129,6 +129,179 @@ function hashToken(token) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function normalizePhone(value) {
+  const phone = String(value ?? "").trim().replace(/[\s().-]/g, "");
+  if (!phone) return null;
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+    throw new ApiError("Enter a phone number in international format, for example +639171234567.", 400);
+  }
+  return phone;
+}
+
+function providerForChannel(channel) {
+  return channel === "email" ? config.notifications.emailProvider : config.notifications.smsProvider;
+}
+
+async function sendEmail({ to, subject, text, html }) {
+  const { emailProvider, emailApiKey, emailFrom } = config.notifications;
+  if (emailProvider !== "resend") {
+    return { status: "not_configured", provider: emailProvider || "console", error: "Email delivery is not configured." };
+  }
+  if (!emailApiKey || !emailFrom) {
+    return { status: "not_configured", provider: "resend", error: "Resend email configuration is incomplete." };
+  }
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${emailApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from: emailFrom, to: [to], subject, text, html }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof payload?.message === "string" ? payload.message : `HTTP ${response.status}`;
+      return { status: "failed", provider: "resend", error: `Email delivery failed: ${detail.slice(0, 300)}` };
+    }
+    return { status: "sent", provider: "resend", providerMessageId: typeof payload?.id === "string" ? payload.id : null, error: null };
+  } catch (error) {
+    return { status: "failed", provider: "resend", error: `Email delivery failed: ${error instanceof Error ? error.message.slice(0, 260) : "network error"}` };
+  }
+}
+
+async function sendSms({ to, body }) {
+  const { smsProvider, twilioAccountSid, twilioAuthToken, twilioFromNumber } = config.notifications;
+  if (smsProvider !== "twilio") {
+    return { status: "not_configured", provider: smsProvider || "console", error: "SMS delivery is not configured." };
+  }
+  if (!twilioAccountSid || !twilioAuthToken || !twilioFromNumber) {
+    return { status: "not_configured", provider: "twilio", error: "Twilio SMS configuration is incomplete." };
+  }
+  try {
+    const encodedCredentials = Buffer.from(`${twilioAccountSid}:${twilioAuthToken}`).toString("base64");
+    const form = new URLSearchParams({ From: twilioFromNumber, To: to, Body: body });
+    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(twilioAccountSid)}/Messages.json`, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${encodedCredentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: form,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof payload?.message === "string" ? payload.message : `HTTP ${response.status}`;
+      return { status: "failed", provider: "twilio", error: `SMS delivery failed: ${detail.slice(0, 300)}` };
+    }
+    return { status: "sent", provider: "twilio", providerMessageId: typeof payload?.sid === "string" ? payload.sid : null, error: null };
+  } catch (error) {
+    return { status: "failed", provider: "twilio", error: `SMS delivery failed: ${error instanceof Error ? error.message.slice(0, 260) : "network error"}` };
+  }
+}
+
+async function createDelivery({ notificationId = null, userId = null, eventKey, channel, destination }) {
+  const existing = await row("SELECT * FROM notification_deliveries WHERE event_key = ? AND channel = ? LIMIT 1", [eventKey, channel]);
+  if (existing) return existing;
+  const id = randomUUID();
+  try {
+    await execute(
+      "INSERT INTO notification_deliveries (id, notification_id, user_id, event_key, channel, destination, status, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, notificationId, userId, eventKey, channel, destination, "pending", providerForChannel(channel)],
+    );
+  } catch (error) {
+    if (!isDuplicateError(error)) throw error;
+  }
+  return row("SELECT * FROM notification_deliveries WHERE event_key = ? AND channel = ? LIMIT 1", [eventKey, channel]);
+}
+
+async function dispatchDelivery(delivery, message) {
+  if (!delivery || delivery.status !== "pending") return delivery;
+  const result = delivery.channel === "email" ? await sendEmail(message) : await sendSms(message);
+  await execute(
+    `UPDATE notification_deliveries SET status = ?, provider = ?, provider_message_id = ?, error = ?, sent_at = ${result.status === "sent" ? "UTC_TIMESTAMP()" : "NULL"} WHERE id = ?`,
+    [result.status, result.provider, result.providerMessageId ?? null, result.error ?? null, delivery.id],
+  );
+  return { ...delivery, ...result };
+}
+
+async function ensureOrderReadyNotification(order, customer) {
+  const eventKey = `order-ready:${order.id}`;
+  let notification = await row("SELECT * FROM notifications WHERE event_key = ? LIMIT 1", [eventKey]);
+  if (!notification) {
+    const id = randomUUID();
+    const title = "Your order is ready";
+    const body = `${order.garment_type} is ready for pickup. Please contact your dressmaker for collection details.`;
+    try {
+      await execute(
+        "INSERT INTO notifications (id, user_id, type, title, body, metadata, event_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, customer.id, "order_ready", title, body, jsonParameter({ order_id: order.id, status: order.status }), eventKey],
+      );
+    } catch (error) {
+      if (!isDuplicateError(error)) throw error;
+    }
+    notification = await row("SELECT * FROM notifications WHERE event_key = ? LIMIT 1", [eventKey]);
+  }
+  return notification;
+}
+
+async function dispatchOrderReadyNotifications(orderId) {
+  const order = await row(
+    "SELECT o.*, u.id AS customer_user_id, u.first_name, u.last_name, u.email, u.phone, u.email_notifications, u.sms_notifications FROM orders o JOIN users u ON u.id = o.customer_id WHERE o.id = ? LIMIT 1",
+    [orderId],
+  );
+  if (!order) return;
+  const customer = {
+    id: order.customer_user_id,
+    first_name: order.first_name,
+    last_name: order.last_name,
+    email: order.email,
+    phone: order.phone,
+    email_notifications: order.email_notifications,
+    sms_notifications: order.sms_notifications,
+  };
+  const notification = await ensureOrderReadyNotification(order, customer);
+  const appUrl = config.notifications.publicAppUrl;
+  const customerName = customer.first_name || "there";
+  const orderLink = appUrl ? `\nOpen SukatAI: ${appUrl}` : "";
+  const text = `Hi ${customerName}, your ${order.garment_type} order is ready for pickup. Please contact your dressmaker for collection details.${orderLink}`;
+  const html = `<p>Hi ${escapeHtml(customerName)},</p><p>Your <strong>${escapeHtml(order.garment_type)}</strong> order is ready for pickup.</p><p>Please contact your dressmaker for collection details.</p>${appUrl ? `<p><a href="${escapeHtml(appUrl)}">Open SukatAI</a></p>` : ""}`;
+  const deliveries = [];
+  if (customer.email && (customer.email_notifications === undefined || booleanInput(customer.email_notifications))) {
+    deliveries.push({
+      delivery: await createDelivery({ notificationId: notification.id, userId: customer.id, eventKey: `order-ready:${order.id}`, channel: "email", destination: customer.email }),
+      message: { to: customer.email, subject: `SukatAI: ${order.garment_type} is ready`, text, html },
+    });
+  }
+  if (customer.phone && booleanInput(customer.sms_notifications)) {
+    deliveries.push({
+      delivery: await createDelivery({ notificationId: notification.id, userId: customer.id, eventKey: `order-ready:${order.id}`, channel: "sms", destination: customer.phone }),
+      message: { to: customer.phone, body: `SukatAI: Your ${order.garment_type} order is ready for pickup. Contact your dressmaker for details.` },
+    });
+  }
+  const results = [];
+  for (const item of deliveries) results.push(await dispatchDelivery(item.delivery, item.message));
+  await execute("UPDATE notifications SET metadata = ? WHERE id = ?", [jsonParameter({ order_id: order.id, status: order.status, deliveries: results.map((result) => ({ channel: result?.channel, status: result?.status })) }), notification.id]);
+}
+
+async function dispatchInvitationEmail({ invitationId, invitedBy, email, organizationName, inviteUrl }) {
+  const eventKey = `invitation:${invitationId}`;
+  const delivery = await createDelivery({ notificationId: null, userId: invitedBy, eventKey, channel: "email", destination: email });
+  const text = `You have been invited to join ${organizationName} on SukatAI as a dressmaker. Open this link within 7 days to activate your account:\n${inviteUrl}`;
+  const html = `<p>You have been invited to join <strong>${escapeHtml(organizationName)}</strong> on SukatAI as a dressmaker.</p><p>This secure invitation expires in 7 days.</p><p><a href="${escapeHtml(inviteUrl)}">Accept the invitation</a></p><p>If the button does not work, copy this link:</p><p>${escapeHtml(inviteUrl)}</p>`;
+  const result = await dispatchDelivery(delivery, { to: email, subject: `Invitation to join ${organizationName} on SukatAI`, text, html });
+  return { status: result?.status ?? "pending", provider: result?.provider ?? providerForChannel("email"), error: result?.error ?? null };
+}
+
 function publicUser(user) {
   const created = isoDate(user.created_at) ?? new Date().toISOString();
   const updated = isoDate(user.updated_at) ?? created;
@@ -138,7 +311,7 @@ function publicUser(user) {
     role: "authenticated",
     email: user.email,
     email_confirmed_at: created,
-    phone: "",
+    phone: user.phone ?? "",
     confirmed_at: created,
     last_sign_in_at: updated,
     app_metadata: { provider: "email", providers: ["email"] },
@@ -169,6 +342,9 @@ function profileResponse(user) {
     first_name: user.first_name,
     last_name: user.last_name,
     email: user.email,
+    phone: user.phone ?? null,
+    email_notifications: user.email_notifications === undefined || user.email_notifications === null ? true : booleanInput(user.email_notifications),
+    sms_notifications: user.sms_notifications === undefined || user.sms_notifications === null ? false : booleanInput(user.sms_notifications),
     avatar_url: user.avatar_url,
     unit_system: user.unit_system,
     created_at: isoDate(user.created_at),
@@ -287,6 +463,7 @@ function invitationResponse(invitation) {
     accepted_at: isoDate(invitation.accepted_at),
     revoked_at: isoDate(invitation.revoked_at),
     invited_by: invitation.invited_by,
+    email_delivery_status: invitation.email_delivery_status ?? null,
     created_at: isoDate(invitation.created_at),
   };
 }
@@ -648,8 +825,12 @@ async function handleAction(req, res) {
       const firstName = stringInput(data, "first_name", user.first_name) ?? user.first_name;
       const lastName = stringInput(data, "last_name", user.last_name) ?? user.last_name;
       const unit = stringInput(data, "unit_system", user.unit_system) ?? user.unit_system;
+      const phone = normalizePhone(stringInput(data, "phone", user.phone ?? ""));
+      const emailNotifications = data.email_notifications === undefined ? booleanInput(user.email_notifications ?? true) : booleanInput(data.email_notifications);
+      const smsNotifications = data.sms_notifications === undefined ? booleanInput(user.sms_notifications ?? false) : booleanInput(data.sms_notifications);
       if (!firstName || !lastName || !["cm", "ftin"].includes(unit)) throw new ApiError("Profile values are invalid.", 400);
-      await execute("UPDATE users SET first_name = ?, last_name = ?, unit_system = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [firstName.slice(0, 80), lastName.slice(0, 80), unit, user.id]);
+      if (smsNotifications && !phone) throw new ApiError("Add a phone number before enabling text notifications.", 400);
+      await execute("UPDATE users SET first_name = ?, last_name = ?, phone = ?, email_notifications = ?, sms_notifications = ?, unit_system = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [firstName.slice(0, 80), lastName.slice(0, 80), phone, emailNotifications ? 1 : 0, smsNotifications ? 1 : 0, unit, user.id]);
       return sendData(res, profileResponse(await row("SELECT * FROM users WHERE id = ? LIMIT 1", [user.id])));
     }
 
@@ -710,7 +891,7 @@ async function handleAction(req, res) {
 
     case "invitations": {
       await requireAdmin(req);
-      return sendData(res, (await rows("SELECT * FROM dressmaker_invitations ORDER BY created_at DESC")).map(invitationResponse));
+      return sendData(res, (await rows("SELECT i.*, d.status AS email_delivery_status FROM dressmaker_invitations i LEFT JOIN notification_deliveries d ON d.event_key = CONCAT('invitation:', i.id) AND d.channel = 'email' ORDER BY i.created_at DESC")).map(invitationResponse));
     }
 
     case "invite_dressmaker": {
@@ -718,15 +899,22 @@ async function handleAction(req, res) {
       const email = (stringInput(data, "email", "") ?? "").toLowerCase();
       const organizationId = stringInput(data, "organization_id", "") ?? "";
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !organizationId) throw new ApiError("Enter a valid email and organization.", 400);
-      if (!await row("SELECT id FROM organizations WHERE id = ? LIMIT 1", [organizationId])) throw new ApiError("Organization not found.", 404);
+      const organization = await row("SELECT id, name FROM organizations WHERE id = ? LIMIT 1", [organizationId]);
+      if (!organization) throw new ApiError("Organization not found.", 404);
       const token = randomBytes(24).toString("hex");
       const invitationId = randomUUID();
       await execute("INSERT INTO dressmaker_invitations (id, organization_id, email, invited_role, token_hash, expires_at, invited_by) VALUES (?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 7 DAY), ?)", [invitationId, organizationId, email, "dressmaker", hashToken(token), user.id]);
       const redirect = stringInput(data, "redirect_to", "") ?? "";
       const base = redirect || `${requestOrigin(req)}/`;
-      const inviteUrl = new URL(base);
+      let inviteUrl;
+      try {
+        inviteUrl = new URL(base);
+      } catch {
+        throw new ApiError("The invitation redirect URL is invalid.", 400);
+      }
       inviteUrl.searchParams.set("invite", token);
-      return sendData(res, { invitation_id: invitationId, invite_url: inviteUrl.toString() });
+      const delivery = await dispatchInvitationEmail({ invitationId, invitedBy: user.id, email, organizationName: organization.name, inviteUrl: inviteUrl.toString() });
+      return sendData(res, { invitation_id: invitationId, invite_url: inviteUrl.toString(), email_status: delivery.status, email_provider: delivery.provider, email_error: delivery.error });
     }
 
     case "accept_dressmaker_invitation": {
@@ -893,7 +1081,9 @@ async function handleAction(req, res) {
       if (order.customer_id !== user.id) requireOrganizationStaff(user, order.organization_id);
       const status = stringInput(data, "status", "") ?? "";
       if (!allowedOrderStatuses.includes(status)) throw new ApiError("The order status is invalid.", 400);
+      if (order.customer_id === user.id && status !== order.status) throw new ApiError("Only your dressmaker can update the production status.", 403);
       await execute("UPDATE orders SET status = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [status, orderId]);
+      if (status === "ready_for_pickup" && order.status !== status) await dispatchOrderReadyNotifications(orderId);
       return sendData(res, orderResponse(await row("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])));
     }
 

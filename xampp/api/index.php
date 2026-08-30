@@ -95,6 +95,19 @@ function stringInput(array $data, string $key, ?string $default = null): ?string
     return is_scalar($data[$key]) ? trim((string) $data[$key]) : $default;
 }
 
+function booleanInput($value): bool
+{
+    return $value === true || $value === 1 || $value === '1' || strtolower((string) $value) === 'true';
+}
+
+function normalizePhone(?string $value): ?string
+{
+    $phone = preg_replace('/[\s().-]/', '', trim($value ?? '')) ?? '';
+    if ($phone === '') return null;
+    if (!preg_match('/^\+[1-9]\d{7,14}$/', $phone)) throw new SukatApiException('Enter a phone number in international format, for example +639171234567.', 400);
+    return $phone;
+}
+
 function uuid(): string
 {
     $hex = bin2hex(random_bytes(16));
@@ -149,7 +162,7 @@ function publicUser(array $user): array
         'role' => 'authenticated',
         'email' => $user['email'],
         'email_confirmed_at' => $created,
-        'phone' => '',
+        'phone' => $user['phone'] ?? '',
         'confirmed_at' => $created,
         'last_sign_in_at' => $updated,
         'app_metadata' => ['provider' => 'email', 'providers' => ['email']],
@@ -185,6 +198,9 @@ function profileResponse(array $user): array
         'first_name' => $user['first_name'],
         'last_name' => $user['last_name'],
         'email' => $user['email'],
+        'phone' => $user['phone'] ?? null,
+        'email_notifications' => array_key_exists('email_notifications', $user) ? booleanInput($user['email_notifications']) : true,
+        'sms_notifications' => array_key_exists('sms_notifications', $user) ? booleanInput($user['sms_notifications']) : false,
         'avatar_url' => $user['avatar_url'],
         'unit_system' => $user['unit_system'],
         'created_at' => $user['created_at'],
@@ -513,9 +529,13 @@ try {
             $firstName = stringInput($data, 'first_name', $user['first_name']) ?? $user['first_name'];
             $lastName = stringInput($data, 'last_name', $user['last_name']) ?? $user['last_name'];
             $unit = stringInput($data, 'unit_system', $user['unit_system']) ?? $user['unit_system'];
+            $phone = normalizePhone(stringInput($data, 'phone', $user['phone'] ?? ''));
+            $emailNotifications = array_key_exists('email_notifications', $data) ? booleanInput($data['email_notifications']) : (array_key_exists('email_notifications', $user) ? booleanInput($user['email_notifications']) : true);
+            $smsNotifications = array_key_exists('sms_notifications', $data) ? booleanInput($data['sms_notifications']) : (array_key_exists('sms_notifications', $user) ? booleanInput($user['sms_notifications']) : false);
             if ($firstName === '' || $lastName === '' || !in_array($unit, ['cm', 'ftin'], true)) throw new SukatApiException('Profile values are invalid.', 400);
-            $statement = database()->prepare('UPDATE users SET first_name = ?, last_name = ?, unit_system = ?, updated_at = NOW() WHERE id = ?');
-            $statement->execute([substr($firstName, 0, 80), substr($lastName, 0, 80), $unit, $user['id']]);
+            if ($smsNotifications && $phone === null) throw new SukatApiException('Add a phone number before enabling text notifications.', 400);
+            $statement = database()->prepare('UPDATE users SET first_name = ?, last_name = ?, phone = ?, email_notifications = ?, sms_notifications = ?, unit_system = ?, updated_at = NOW() WHERE id = ?');
+            $statement->execute([substr($firstName, 0, 80), substr($lastName, 0, 80), $phone, $emailNotifications ? 1 : 0, $smsNotifications ? 1 : 0, $unit, $user['id']]);
             $statement = database()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
             $statement->execute([$user['id']]);
             jsonResponse(profileResponse($statement->fetch()));

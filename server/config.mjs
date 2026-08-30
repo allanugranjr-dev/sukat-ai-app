@@ -36,6 +36,16 @@ export const config = {
   publicDirectory: path.join(projectRoot, "public"),
   processingDelayMs: numberEnv("SUKATAI_PROCESSING_DELAY_MS", 900),
   sessionHours: numberEnv("SUKATAI_SESSION_HOURS", 24),
+  notifications: {
+    emailProvider: (process.env.SUKATAI_EMAIL_PROVIDER ?? (process.env.RESEND_API_KEY ? "resend" : "console")).trim().toLowerCase(),
+    emailApiKey: (process.env.RESEND_API_KEY ?? "").trim(),
+    emailFrom: (process.env.SUKATAI_EMAIL_FROM ?? "SukatAI <onboarding@resend.dev>").trim(),
+    smsProvider: (process.env.SUKATAI_SMS_PROVIDER ?? (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN ? "twilio" : "console")).trim().toLowerCase(),
+    twilioAccountSid: (process.env.TWILIO_ACCOUNT_SID ?? "").trim(),
+    twilioAuthToken: (process.env.TWILIO_AUTH_TOKEN ?? "").trim(),
+    twilioFromNumber: (process.env.TWILIO_FROM_NUMBER ?? "").trim(),
+    publicAppUrl: (process.env.SUKATAI_PUBLIC_APP_URL ?? "").trim().replace(/\/$/, ""),
+  },
   allowedOrigins: listEnv("SUKATAI_WEB_ORIGINS", [
     "http://127.0.0.1:5173",
     "http://localhost:5173",

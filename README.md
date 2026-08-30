@@ -72,6 +72,7 @@ The migration creates:
 - `scans` and `scan_assets`
 - `body_models`, `measurements`, and `measurement_review_events`
 - `orders`, `fittings`, and `notifications`
+- `notification_deliveries` for idempotent email/SMS delivery attempts
 - private `scan-captures` and `body-models` Storage buckets
 - Auth profile creation, timestamp, and privilege-protection triggers
 - RLS policies for customer ownership, organization-scoped dressmaker access, and administrator access
@@ -154,6 +155,23 @@ For frontend development with hot reload, use two terminals:
     npm run dev:node
 
 The Vite development app runs at http://127.0.0.1:5173/ and connects to the Node API on port 3001. The Node server automatically applies the local schema from xampp/database/sukatai.sql and creates the persistent sessions table.
+
+### Email invitations and order-ready text messages
+
+Administrators can send dressmaker invitations by email from the Invitations screen. Customers can add an international-format mobile number and opt in to email or SMS order-ready updates from their Profile screen. When an order changes to `ready_for_pickup`, SukatAI creates one in-app notification and makes at most one delivery attempt per channel.
+
+The Node runtime uses Resend for email and Twilio for SMS. Keep these values in the server-only `.env.node.local` file; never put provider keys in Vite variables or commit them:
+
+    SUKATAI_EMAIL_PROVIDER=resend
+    RESEND_API_KEY=re_...
+    SUKATAI_EMAIL_FROM=SukatAI <noreply@your-domain.com>
+    SUKATAI_SMS_PROVIDER=twilio
+    TWILIO_ACCOUNT_SID=AC...
+    TWILIO_AUTH_TOKEN=...
+    TWILIO_FROM_NUMBER=+1...
+    SUKATAI_PUBLIC_APP_URL=https://your-frontend.example.com
+
+If the provider values are left as `console`, the app still stores the invitation/order notification and shows it in the app, but it reports external delivery as `not_configured` instead of pretending a message was sent. Restart `npm run start:node` after changing the server environment.
 
 Create a versioned local backup of the MariaDB database and scan storage with:
 

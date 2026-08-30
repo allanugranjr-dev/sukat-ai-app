@@ -20,6 +20,9 @@ export interface Profile {
   first_name: string;
   last_name: string;
   email: string;
+  phone: string | null;
+  email_notifications: boolean;
+  sms_notifications: boolean;
   avatar_url: string | null;
   unit_system: UnitSystem;
   created_at: string;
@@ -130,6 +133,7 @@ export interface Invitation {
   accepted_at: string | null;
   revoked_at: string | null;
   invited_by: string;
+  email_delivery_status?: "pending" | "sent" | "failed" | "not_configured" | null;
   created_at: string;
 }
 

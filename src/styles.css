@@ -659,6 +659,18 @@ button:disabled { transform: none !important; }
 .check-row, .check-label, .consent-label { cursor: pointer; }
 .notification-popover { border-radius: 15px; box-shadow: var(--shadow); }
 .notification-item.unread { background: #f1f4ff; }
+
+.notification-preferences { border-top: 1px solid var(--line); display: grid; gap: 11px; grid-column: 1 / -1; padding-top: 18px; }
+.notification-preferences .eyebrow { margin: 0 0 2px; }
+.notification-preferences .consent-label { color: var(--ink); font-size: 11px; }
+.profile-fields .field-hint { margin-top: -2px; }
+.invitation-row > .badge { flex: 0 0 auto; white-space: nowrap; }
+
+@media (max-width: 980px) {
+  .invitation-row { align-items: flex-start; flex-wrap: wrap; }
+  .invitation-row > div { min-width: min(220px, 100%); }
+  .invitation-row > .invite-expiry { margin-left: 40px; }
+}
 .capture-stage, .processing-visual { border-radius: 16px; }
 .model-empty, .model-ready { background: #f4f6fb; border-color: #d8e0ef; border-radius: 16px; box-shadow: none; }
 .model-preview-badge { background: rgba(24,38,64,.9); border-color: rgba(255,255,255,.24); }

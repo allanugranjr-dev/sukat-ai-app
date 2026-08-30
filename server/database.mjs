@@ -26,6 +26,26 @@ export async function ensureDatabase() {
   }
 }
 
+async function ensureColumn(tableName, columnName, definition) {
+  const existing = await pool.query(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1",
+    [config.db.name, tableName, columnName],
+  );
+  if (existing.length === 0) {
+    await pool.query(`ALTER TABLE ${safeDatabaseIdentifier(tableName)} ADD COLUMN ${safeDatabaseIdentifier(columnName)} ${definition}`);
+  }
+}
+
+async function ensureIndex(tableName, indexName, definition) {
+  const existing = await pool.query(
+    "SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ? LIMIT 1",
+    [config.db.name, tableName, indexName],
+  );
+  if (existing.length === 0) {
+    await pool.query(`ALTER TABLE ${safeDatabaseIdentifier(tableName)} ADD ${definition}`);
+  }
+}
+
 export async function initializeDatabase({ applySchema = true } = {}) {
   await ensureDatabase();
   pool = mariadb.createPool({ ...connectionOptions(true), connectionLimit: config.db.connectionLimit });
@@ -34,6 +54,30 @@ export async function initializeDatabase({ applySchema = true } = {}) {
     const schema = await fs.readFile(schemaPath, "utf8");
     await pool.query(schema);
   }
+  await ensureColumn("users", "phone", "VARCHAR(32) NULL AFTER email");
+  await ensureColumn("users", "email_notifications", "TINYINT(1) NOT NULL DEFAULT 1 AFTER phone");
+  await ensureColumn("users", "sms_notifications", "TINYINT(1) NOT NULL DEFAULT 0 AFTER email_notifications");
+  await ensureColumn("notifications", "event_key", "VARCHAR(180) NULL AFTER metadata");
+  await ensureIndex("notifications", "notifications_event_key_unique", "UNIQUE KEY `notifications_event_key_unique` (`event_key`)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+      id CHAR(36) NOT NULL,
+      notification_id CHAR(36) NULL,
+      user_id CHAR(36) NULL,
+      event_key VARCHAR(180) NOT NULL,
+      channel VARCHAR(20) NOT NULL,
+      destination VARCHAR(320) NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'pending',
+      provider VARCHAR(40) NOT NULL DEFAULT 'console',
+      provider_message_id VARCHAR(255) NULL,
+      error VARCHAR(1000) NULL,
+      sent_at DATETIME NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY notification_deliveries_event_channel_unique (event_key, channel),
+      KEY notification_deliveries_user_idx (user_id, created_at)
+    ) ENGINE=InnoDB
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash CHAR(64) NOT NULL,

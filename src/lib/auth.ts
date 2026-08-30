@@ -105,7 +105,7 @@ export async function signOut(): Promise<void> {
 
 export async function updateProfile(
   userId: string,
-  updates: Pick<Profile, "first_name" | "last_name" | "unit_system">,
+  updates: Pick<Profile, "first_name" | "last_name" | "phone" | "email_notifications" | "sms_notifications" | "unit_system">,
 ): Promise<Profile> {
   if (isLocalApiMode) {
     void userId;
@@ -168,12 +168,12 @@ export async function inviteDressmaker(input: {
   email: string;
   organizationId: string;
   redirectTo: string;
-}): Promise<{ invitationId: string; inviteUrl: string | null }> {
+}): Promise<{ invitationId: string; inviteUrl: string | null; emailStatus: string; emailError: string | null }> {
   if (isLocalApiMode) {
-    const payload = await xamppRequest<{ invitation_id: string; invite_url?: string }>("invite_dressmaker", {
+    const payload = await xamppRequest<{ invitation_id: string; invite_url?: string; email_status?: string; email_error?: string | null }>("invite_dressmaker", {
       body: { email: input.email.trim(), organization_id: input.organizationId, redirect_to: input.redirectTo },
     });
-    return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null };
+    return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null, emailStatus: payload.email_status ?? "not_configured", emailError: payload.email_error ?? null };
   }
   const { data, error } = await requireSupabase().functions.invoke("invite-dressmaker", {
     body: input,
@@ -181,7 +181,7 @@ export async function inviteDressmaker(input: {
   if (error) throw new Error(readableError(error));
   const payload = data as { invitation_id?: string; invite_url?: string } | null;
   if (!payload?.invitation_id) throw new Error("The invitation service returned an incomplete response.");
-  return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null };
+  return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null, emailStatus: "sent", emailError: null };
 }
 
 export async function acceptDressmakerInvitation(input: {

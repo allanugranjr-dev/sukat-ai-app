@@ -45,6 +45,9 @@ create table if not exists public.profiles (
   first_name text not null check (char_length(trim(first_name)) between 1 and 80),
   last_name text not null check (char_length(trim(last_name)) between 1 and 80),
   email text not null,
+  phone text,
+  email_notifications boolean not null default true,
+  sms_notifications boolean not null default false,
   avatar_url text,
   unit_system text not null default 'cm' check (unit_system in ('cm', 'ftin')),
   created_at timestamptz not null default now(),
@@ -159,8 +162,31 @@ create table if not exists public.notifications (
   body text not null check (char_length(body) between 1 and 1000),
   read_at timestamptz,
   metadata jsonb not null default '{}'::jsonb,
+  event_key text unique,
   created_at timestamptz not null default now()
 );
+
+create table if not exists public.notification_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  notification_id uuid references public.notifications(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade,
+  event_key text not null,
+  channel text not null check (channel in ('email', 'sms')),
+  destination text not null,
+  status text not null default 'pending' check (status in ('pending', 'sent', 'failed', 'not_configured', 'skipped')),
+  provider text not null default 'console',
+  provider_message_id text,
+  error text,
+  sent_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique(event_key, channel)
+);
+
+alter table public.profiles add column if not exists phone text;
+alter table public.profiles add column if not exists email_notifications boolean not null default true;
+alter table public.profiles add column if not exists sms_notifications boolean not null default false;
+alter table public.notifications add column if not exists event_key text;
+create unique index if not exists notifications_event_key_unique on public.notifications(event_key);
 
 create index if not exists profiles_org_idx on public.profiles(organization_id);
 create index if not exists invitations_org_status_idx on public.dressmaker_invitations(organization_id, accepted_at, revoked_at);
@@ -173,6 +199,7 @@ create index if not exists orders_customer_idx on public.orders(customer_id, cre
 create index if not exists orders_org_status_idx on public.orders(organization_id, status);
 create index if not exists fittings_order_idx on public.fittings(order_id, starts_at);
 create index if not exists notifications_user_idx on public.notifications(user_id, read_at, created_at desc);
+create index if not exists notification_deliveries_user_idx on public.notification_deliveries(user_id, created_at desc);
 
 create or replace function public.is_admin()
 returns boolean
@@ -228,6 +255,30 @@ drop trigger if exists measurements_touch_updated_at on public.measurements;
 create trigger measurements_touch_updated_at before update on public.measurements for each row execute function public.touch_updated_at();
 drop trigger if exists orders_touch_updated_at on public.orders;
 create trigger orders_touch_updated_at before update on public.orders for each row execute function public.touch_updated_at();
+
+create or replace function public.create_order_ready_notification()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if new.status = 'ready_for_pickup' and old.status is distinct from new.status then
+    insert into public.notifications (user_id, type, title, body, metadata, event_key)
+    values (
+      new.customer_id,
+      'order_ready',
+      'Your order is ready',
+      left(new.garment_type || ' is ready for pickup. Please contact your dressmaker for collection details.', 1000),
+      jsonb_build_object('order_id', new.id, 'status', new.status),
+      'order-ready:' || new.id::text
+    )
+    on conflict (event_key) do nothing;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists orders_create_ready_notification on public.orders;
+create trigger orders_create_ready_notification after update of status on public.orders for each row execute function public.create_order_ready_notification();
 
 create or replace function public.handle_new_user()
 returns trigger
@@ -374,6 +425,7 @@ alter table public.measurement_review_events enable row level security;
 alter table public.orders enable row level security;
 alter table public.fittings enable row level security;
 alter table public.notifications enable row level security;
+alter table public.notification_deliveries enable row level security;
 
 drop policy if exists profiles_select on public.profiles;
 create policy profiles_select on public.profiles for select using (id = auth.uid() or public.is_admin() or (organization_id is not null and public.is_org_member(organization_id)));
