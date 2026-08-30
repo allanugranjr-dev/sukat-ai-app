@@ -1375,6 +1375,29 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* Dedicated email and invitation states. Keep the auth shell familiar while making the next action obvious. */
 .verification-page .auth-form-wrap, .invitation-welcome-page .auth-form-wrap { max-width: 520px; }
+.verification-page .auth-form-wrap, .invitation-card { background: #fff; border: 1px solid rgba(28,54,74,.09); border-radius: 24px; box-shadow: 0 24px 60px rgba(16,43,61,.1); padding: clamp(25px, 4vw, 43px); }
+.verification-story { background: radial-gradient(circle at 82% 22%, rgba(34,174,168,.2), transparent 26%), var(--navy); }
+.invitation-story { background: radial-gradient(circle at 12% 82%, rgba(230,172,48,.16), transparent 28%), radial-gradient(circle at 88% 12%, rgba(34,174,168,.2), transparent 25%), var(--navy); }
+.invitation-story-top { align-items: flex-start; display: flex; justify-content: space-between; position: relative; z-index: 1; }
+.invitation-story-top .brand { margin: 0; }
+.invitation-story-top .badge { margin-top: 2px; }
+.invitation-story .auth-story-inner { max-width: 500px; }
+.invitation-story-metrics { border-top: 1px solid rgba(255,255,255,.14); display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); margin-top: 42px; padding-top: 20px; }
+.invitation-story-metrics span { display: grid; gap: 4px; }
+.invitation-story-metrics strong { color: #fff; font-family: "Playfair Display", Georgia, serif; font-size: 26px; letter-spacing: -.04em; }
+.invitation-story-metrics small { color: rgba(255,255,255,.48); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.verification-topline, .invitation-card-top { align-items: center; display: flex; justify-content: space-between; margin-bottom: 30px; }
+.verification-topline > span, .invitation-card-top > span { align-items: center; color: var(--muted); display: inline-flex; font-size: 11px; gap: 5px; }
+.verification-topline .badge, .invitation-card-top .badge { font-size: 10px; }
+.verification-card .verification-icon { margin-bottom: 22px; }
+.verification-card .auth-heading { margin-bottom: 25px; }
+.verification-email-field { margin: -7px 0 20px; }
+.invitation-card { max-width: 540px !important; }
+.invitation-card .verification-icon { height: 64px; margin-bottom: 22px; width: 64px; }
+.invitation-card .auth-heading { margin-bottom: 25px; }
+.invitation-assurance { align-items: center; background: #f7fafb; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); display: flex; font-size: 11px; gap: 8px; line-height: 1.45; margin: 17px 0 22px; padding: 11px 12px; }
+.invitation-assurance svg { color: var(--teal); flex: 0 0 auto; }
+.invitation-card > .button { width: 100%; }
 .verification-icon { align-items: center; background: var(--teal-soft); border: 1px solid #acd9d5; border-radius: 14px; color: var(--teal-dark); display: inline-flex; height: 58px; justify-content: center; margin-bottom: 24px; width: 58px; }
 .verification-icon.verified { background: var(--green-soft); border-color: #b9dfc7; color: var(--green); }
 .verification-icon.needs-attention { background: var(--gold-soft); border-color: #e7d08b; color: var(--gold); }
@@ -1400,6 +1423,12 @@ button:focus:not(:focus-visible) { outline: none; }
 .invitation-back-link { display: block; margin-top: 18px; }
 
 @media (max-width: 600px) {
+  .invitation-story-top { align-items: flex-start; flex-direction: column; gap: 19px; }
+  .invitation-story-metrics { gap: 10px; margin-top: 30px; }
+  .invitation-story-metrics strong { font-size: 22px; }
+  .invitation-story-metrics small { font-size: 8px; }
+  .verification-page .auth-form-wrap, .invitation-welcome-page .auth-form-wrap { border-radius: 18px; padding: 22px 19px; }
+  .verification-topline, .invitation-card-top { margin-bottom: 24px; }
   .verification-actions { align-items: stretch; flex-direction: column; }
   .verification-actions .button, .verification-actions .text-button { width: 100%; }
   .verification-actions .text-button { text-align: left; }

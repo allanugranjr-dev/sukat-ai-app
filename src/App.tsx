@@ -394,11 +394,17 @@ function ConfiguredApp() {
   const [publicView, setPublicView] = useState<AuthMode>("landing");
   const [notice, setNotice] = useState("");
   const [verificationEmail, setVerificationEmail] = useState("");
-  const inviteToken = new URLSearchParams(window.location.search).get("invite");
+  const [invitationAuthOpen, setInvitationAuthOpen] = useState(false);
+  const invitationParams = new URLSearchParams(window.location.search);
+  const inviteToken = invitationParams.get("invite") ?? invitationParams.get("token");
   const authHash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const verificationRequested = new URLSearchParams(window.location.search).get("verify") === "1" || authHash.get("type") === "signup";
-  const verificationError = authHash.get("error_description") ?? "";
+  const verificationError = authHash.get("error_description") ?? authHash.get("error_code") ?? authHash.get("error") ?? "";
   const resetRequested = new URLSearchParams(window.location.search).get("reset") === "1" || window.location.hash.includes("type=recovery");
+
+  useEffect(() => {
+    if (!inviteToken) setInvitationAuthOpen(false);
+  }, [inviteToken]);
 
   useEffect(() => {
     let active = true;
@@ -442,15 +448,18 @@ function ConfiguredApp() {
   const clearSpecialUrl = () => {
     const next = new URL(window.location.href);
     next.searchParams.delete("invite");
+    next.searchParams.delete("token");
     next.searchParams.delete("reset");
     next.searchParams.delete("verify");
     window.history.replaceState({}, "", `${next.pathname}${next.search}`);
   };
 
   if (loading) return <FullPageLoading />;
-  if (inviteToken) return <InvitationAcceptPage token={inviteToken} session={session} profile={profile} onBack={() => { clearSpecialUrl(); setPublicView("signin"); }} onAccepted={async () => { await refreshProfile(); clearSpecialUrl(); }} />;
+  if (inviteToken && session) return <InvitationAcceptPage token={inviteToken} session={session} profile={profile} onBack={() => { clearSpecialUrl(); setPublicView("signin"); }} onAccepted={async () => { await refreshProfile(); clearSpecialUrl(); }} />;
   if (resetRequested && session) return <PasswordResetPage onComplete={() => { clearSpecialUrl(); void signOut(); }} />;
   if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} verified={Boolean(session?.user.email_confirmed_at) && !verificationError} initialError={verificationError} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setPublicView("signin"); }} onContinue={() => { clearSpecialUrl(); setVerificationEmail(""); }} />;
+  if (inviteToken && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
+  if (inviteToken && !session) return <InvitationWelcomePage session={null} onBack={() => { clearSpecialUrl(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
   if (!session) return publicView === "landing" ? <LandingPage onAuth={(view) => { setNotice(""); setPublicView(view); }} /> : <AuthPage mode={publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("landing"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
   if (!profile || !isRole(profile.role)) return <ProfileUnavailable message={profileError || "Your authenticated account does not have a valid SukatAI profile."} onSignOut={() => void signOut()} />;
   return <Workspace profile={profile} onProfileChange={setProfile} onSignOut={() => void signOut()} />;
@@ -489,8 +498,17 @@ function EmailVerificationPage({ email, verified, initialError, onBack, onContin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const hasEmail = Boolean(email.trim());
+  const [resendEmail, setResendEmail] = useState(email);
+  const [cooldown, setCooldown] = useState(0);
+  const hasEmail = Boolean(resendEmail.trim());
   const linkNeedsAttention = Boolean(initialError);
+
+  useEffect(() => setResendEmail(email), [email]);
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
 
   const resend = async () => {
     if (!hasEmail) return;
@@ -498,8 +516,9 @@ function EmailVerificationPage({ email, verified, initialError, onBack, onContin
     setError("");
     setNotice("");
     try {
-      await resendSignupConfirmation(email);
+      await resendSignupConfirmation(resendEmail);
       setNotice("A fresh verification email is on its way. The new link will open this page again.");
+      setCooldown(30);
     } catch (reason: unknown) {
       setError(readableError(reason));
     } finally {
@@ -508,29 +527,46 @@ function EmailVerificationPage({ email, verified, initialError, onBack, onContin
   };
 
   return <div className="auth-page verification-page">
-    <section className="auth-story"><div className="auth-story-inner"><Logo inverse /><p className="eyebrow">MEASURE WITH INTENTION</p><h1>One small step toward <em>better fit.</em></h1><p>Verify your email so your measurement workroom stays private and connected to you.</p><div className="story-list"><span><Icon name="mail" size={18} /> One secure verification link</span><span><Icon name="lock" size={18} /> Private account access</span><span><Icon name="arrow-right" size={18} /> Continue when you are ready</span></div></div><span className="story-footer">SukatAI · secure measurement workspace</span></section>
-    <section className="auth-form-panel"><div className="auth-form-wrap">
+    <section className="auth-story verification-story">
+      <div className="auth-story-inner">
+        <Logo inverse />
+        <p className="eyebrow">MEASURE WITH INTENTION</p>
+        <h1>One small step toward <em>better fit.</em></h1>
+        <p>Verify your email so your measurement workroom stays private and connected to you.</p>
+        <div className="story-list"><span><Icon name="mail" size={18} /> One secure verification link</span><span><Icon name="lock" size={18} /> Private account access</span><span><Icon name="arrow-right" size={18} /> Continue when you are ready</span></div>
+      </div>
+      <span className="story-footer">SukatAI · secure measurement workspace</span>
+    </section>
+    <section className="auth-form-panel"><div className="auth-form-wrap verification-card">
+      <div className="verification-topline"><Badge tone={verified ? "success" : linkNeedsAttention ? "warning" : "teal"} dot>{verified ? "Verified" : linkNeedsAttention ? "Action needed" : "Email confirmation"}</Badge><span>Step 1 of 1</span></div>
       <div className={cn("verification-icon", verified && "verified", linkNeedsAttention && "needs-attention")} aria-hidden="true"><Icon name={verified ? "check" : linkNeedsAttention ? "info" : "mail"} size={26} /></div>
-      <div className="auth-heading"><p className="eyebrow">{verified ? "EMAIL VERIFIED" : linkNeedsAttention ? "VERIFICATION LINK" : "CHECK YOUR INBOX"}</p><h2>{verified ? "Your email is verified." : linkNeedsAttention ? "This link needs attention." : "Verify your email."}</h2><p>{verified ? "Your account is ready. Continue to open your secure SukatAI workroom." : linkNeedsAttention ? "That verification link may have expired or already been used. Request a fresh link to continue." : <>We sent a verification link to <strong>{email || "your email address"}</strong>. Open it to finish creating your account.</>}</p></div>
+      <div className="auth-heading"><p className="eyebrow">{verified ? "EMAIL VERIFIED" : linkNeedsAttention ? "VERIFICATION LINK" : "CHECK YOUR INBOX"}</p><h2>{verified ? "Your email is verified." : linkNeedsAttention ? "This link needs attention." : "Verify your email."}</h2><p>{verified ? "Your account is ready. Continue to open your secure SukatAI workroom." : linkNeedsAttention ? <>That link may have expired or already been used. Request a fresh link{hasEmail ? " below" : " to continue"}.</> : <>We sent a verification link to <strong>{email || "your email address"}</strong>. Open it to finish creating your account.</>}</p></div>
       {!verified && <div className="verification-steps" aria-label="Email verification steps"><div><span>1</span><p><strong>Open the email</strong><small>Look for the message from SukatAI.</small></p></div><div><span>2</span><p><strong>Confirm your address</strong><small>The link is single-purpose and secure.</small></p></div><div><span>3</span><p><strong>Return to your workroom</strong><small>Your account will be ready to use.</small></p></div></div>}
+      {!verified && !hasEmail && <div className="verification-email-field"><Field label="Email address" value={resendEmail} onChange={setResendEmail} placeholder="name@domain.com" type="email" autoComplete="email" /></div>}
       {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}
       {error && <InlineError message={error} />}
-      {verified ? <Button type="button" onClick={onContinue} icon="arrow-right">Continue to SukatAI</Button> : <div className="verification-actions"><Button type="button" onClick={() => void resend()} disabled={!hasEmail || busy} icon="mail">{busy ? "Sending…" : "Resend verification email"}</Button><button type="button" className="text-button" onClick={onBack}>Use a different email</button></div>}
+      {verified ? <Button type="button" onClick={onContinue} icon="arrow-right">Continue to SukatAI</Button> : <div className="verification-actions"><Button type="button" onClick={() => void resend()} disabled={!hasEmail || busy || cooldown > 0} icon="mail">{busy ? "Sending…" : cooldown > 0 ? `Resend in ${cooldown}s` : "Resend verification email"}</Button><button type="button" className="text-button" onClick={onBack}>Use a different email</button></div>}
       <p className="verification-note"><Icon name="shield" size={15} /> If you do not see the message, check your spam or promotions folder.</p>
     </div></section>
   </div>;
 }
 
-function InvitationWelcomePage({ session, onBack, onContinue }: { session: Session | null; onBack: () => void; onContinue?: () => void }) {
+function InvitationWelcomePage({ session, onBack, onContinue }: { session: Session | null; onBack: () => void; onContinue: () => void }) {
   const signedIn = Boolean(session);
   return <div className="auth-page invitation-welcome-page">
-    <section className="auth-story"><div className="auth-story-inner"><Logo inverse /><p className="eyebrow">YOUR WORKROOM AWAITS</p><h1>Make room for <em>better work.</em></h1><p>Someone has invited you to a private SukatAI dressmaking workspace.</p><div className="story-list"><span><Icon name="users" size={18} /> Organization-scoped access</span><span><Icon name="ruler" size={18} /> Reviewable measurements</span><span><Icon name="lock" size={18} /> Private customer photos</span></div></div><span className="story-footer">SukatAI · secure measurement workspace</span></section>
-    <section className="auth-form-panel"><div className="auth-form-wrap">
+    <section className="auth-story invitation-story">
+      <div className="invitation-story-top"><Logo inverse /><Badge tone="dark" dot>PRIVATE INVITATION</Badge></div>
+      <div className="auth-story-inner"><p className="eyebrow">YOUR WORKROOM AWAITS</p><h1>Step into a <em>better workroom.</em></h1><p>Someone has invited you to a private SukatAI dressmaking workspace built for thoughtful, reviewable work.</p><div className="story-list"><span><Icon name="users" size={18} /> Organization-scoped access</span><span><Icon name="ruler" size={18} /> Reviewable measurements</span><span><Icon name="lock" size={18} /> Private customer photos</span></div><div className="invitation-story-metrics"><span><strong>01</strong><small>secure invite</small></span><span><strong>07</strong><small>days to accept</small></span><span><strong>1×</strong><small>one-time access</small></span></div></div>
+      <span className="story-footer">SukatAI · secure measurement workspace</span>
+    </section>
+    <section className="auth-form-panel"><div className="auth-form-wrap invitation-card">
+      <div className="invitation-card-top"><Badge tone="warning" dot>Invitation only</Badge><span><Icon name="clock" size={14} /> Expires in 7 days</span></div>
       <div className="verification-icon invite-welcome-icon" aria-hidden="true"><Icon name="mail" size={26} /></div>
-      <div className="auth-heading"><p className="eyebrow">SECURE INVITATION</p><h2>You’ve been invited.</h2><p>{signedIn ? <>This invitation is addressed to <strong>{session?.user.email}</strong>. Continue to review the invitation and activate your dressmaker account.</> : "Open this page from the invitation email, then sign in with the same email address to continue."}</p></div>
-      <div className="invite-welcome-details"><div><Icon name="shield" size={17} /><span><strong>Verified when accepted</strong><small>The server checks the one-time invitation before granting access.</small></span></div><div><Icon name="clock" size={17} /><span><strong>Available for 7 days</strong><small>Ask the administrator for a new invitation if this one expires.</small></span></div></div>
-      {signedIn ? <Button type="button" onClick={onContinue} icon="arrow-right">Review and activate account</Button> : <Button type="button" onClick={onBack} icon="arrow-right">Go to sign in</Button>}
-      <button type="button" className="text-button invitation-back-link" onClick={onBack}>{signedIn ? "Use a different account" : "Return to sign in"}</button>
+      <div className="auth-heading"><p className="eyebrow">SECURE INVITATION</p><h2>You’ve been invited.</h2><p>{signedIn ? <>This invitation is addressed to <strong>{session?.user.email}</strong>. Continue to review it and activate your dressmaker account.</> : "Sign in with the email address that received this invitation to continue."}</p></div>
+      <div className="invite-welcome-details"><div><Icon name="shield" size={17} /><span><strong>Verified when accepted</strong><small>The server checks the one-time invitation before granting access.</small></span></div><div><Icon name="users" size={17} /><span><strong>Workroom access</strong><small>See only the customers and records assigned to your organization.</small></span></div></div>
+      <div className="invitation-assurance"><Icon name="lock" size={15} /><span>Your invitation is private and can only be used once.</span></div>
+      {signedIn ? <Button type="button" onClick={onContinue} icon="arrow-right">Review and activate account</Button> : <Button type="button" onClick={onContinue} icon="arrow-right">Continue to sign in</Button>}
+      <button type="button" className="text-button invitation-back-link" onClick={onBack}>{signedIn ? "Use a different account" : "Return to home"}</button>
     </div></section>
   </div>;
 }
