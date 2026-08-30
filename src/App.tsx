@@ -2256,7 +2256,18 @@ function AdminInvitations({ profile }: { profile: Profile }) {
     event.preventDefault(); setError(""); setNotice(""); setInviteUrl(""); setRemoveError(""); setRemoveNotice("");
     if (!email.trim() || !organizationId) { setError("Enter an email and choose an organization."); return; }
     setBusy(true);
-    try { const result = await inviteDressmaker({ email, organizationId, redirectTo: `${invitationAppOrigin()}/?invite=` }); setNotice(result.emailStatus === "sent" ? "Invitation created and sent by email." : "Invitation created. Email delivery is not configured yet, so share the secure link below."); setInviteUrl(result.inviteUrl ?? ""); setEmail(""); invitationsState.reload(); } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
+    try {
+      const result = await inviteDressmaker({ email, organizationId, redirectTo: `${invitationAppOrigin()}/?invite=` });
+      const noticeMessage = result.emailStatus === "sent"
+        ? "Invitation created and sent by email."
+        : result.emailStatus === "existing_account"
+          ? "Invitation created for an existing account. Supabase cannot send a second account invite, so share the secure link below. The recipient should sign in with this email before accepting."
+          : result.emailError || "Invitation created. Email delivery is not configured yet, so share the secure link below.";
+      setNotice(noticeMessage);
+      setInviteUrl(result.inviteUrl ?? "");
+      setEmail("");
+      invitationsState.reload();
+    } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
   };
   const removeInvitation = async (invitation: Invitation) => {
     if (!isRevocableInvitation(invitation) || removingId) return;

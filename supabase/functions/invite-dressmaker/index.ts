@@ -68,7 +68,20 @@ Deno.serve(async (request) => {
       data: { invitation_id: invitation.id },
       redirectTo: inviteUrl,
     });
-    if (authError || !invitedUser.user) {
+    const authErrorCode = typeof (authError as { code?: unknown } | null)?.code === "string"
+      ? String((authError as { code?: unknown }).code)
+      : "";
+    const authErrorMessage = authError?.message ?? "";
+    const isExistingAccount = authErrorCode === "email_exists" || /already been registered|already exists|email_exists/i.test(authErrorMessage);
+    if (isExistingAccount) {
+      return jsonResponse({
+        invitation_id: invitation.id,
+        invite_url: inviteUrl,
+        email_status: "existing_account",
+        email_error: "This email already has a SukatAI account. Supabase cannot send a second account invite, so share this secure link and ask the recipient to sign in with this email before accepting.",
+      });
+    }
+    if (authError || !invitedUser?.user) {
       await client.from("dressmaker_invitations").delete().eq("id", invitation.id);
       return jsonResponse({ error: authError?.message ?? "Supabase did not create the invited account." }, 400);
     }
@@ -85,7 +98,7 @@ Deno.serve(async (request) => {
       await client.from("dressmaker_invitations").delete().eq("id", invitation.id);
       return jsonResponse({ error: metadataError.message }, 400);
     }
-    return new Response(JSON.stringify({ invitation_id: invitation.id, invite_url: inviteUrl }), {
+    return new Response(JSON.stringify({ invitation_id: invitation.id, invite_url: inviteUrl, email_status: "sent", email_error: null }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {

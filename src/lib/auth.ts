@@ -5,6 +5,23 @@ import type { Invitation, Notification, Organization, Profile, Role } from "./ty
 
 type XamppAuthPayload = { session: Session; user: User };
 
+async function readableFunctionError(error: unknown): Promise<string> {
+  if (typeof error === "object" && error !== null && "context" in error) {
+    const context = (error as { context?: unknown }).context;
+    if (context && typeof context === "object" && "clone" in context && typeof (context as { clone?: unknown }).clone === "function") {
+      try {
+        const response = await (context as { clone: () => Response }).clone();
+        const payload = await response.json() as { error?: unknown; message?: unknown };
+        const message = payload.error ?? payload.message;
+        if (typeof message === "string" && message.trim()) return message;
+      } catch {
+        // Fall through to the SDK error message when the response is not JSON.
+      }
+    }
+  }
+  return readableError(error);
+}
+
 function xamppAuthResponse(payload: XamppAuthPayload): AuthResponse {
   return { data: { session: payload.session, user: payload.user }, error: null } as AuthResponse;
 }
@@ -196,10 +213,15 @@ export async function inviteDressmaker(input: {
   const { data, error } = await requireSupabase().functions.invoke("invite-dressmaker", {
     body: input,
   });
-  if (error) throw new Error(readableError(error));
-  const payload = data as { invitation_id?: string; invite_url?: string } | null;
+  if (error) throw new Error(await readableFunctionError(error));
+  const payload = data as { invitation_id?: string; invite_url?: string; email_status?: string; email_error?: string | null } | null;
   if (!payload?.invitation_id) throw new Error("The invitation service returned an incomplete response.");
-  return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null, emailStatus: "sent", emailError: null };
+  return {
+    invitationId: payload.invitation_id,
+    inviteUrl: payload.invite_url ?? null,
+    emailStatus: payload.email_status ?? "sent",
+    emailError: payload.email_error ?? null,
+  };
 }
 
 export async function revokeDressmakerInvitation(invitationId: string): Promise<void> {
@@ -212,7 +234,7 @@ export async function revokeDressmakerInvitation(invitationId: string): Promise<
   const { data, error } = await requireSupabase().functions.invoke("revoke-dressmaker-invitation", {
     body: { invitation_id: id },
   });
-  if (error) throw new Error(readableError(error));
+  if (error) throw new Error(await readableFunctionError(error));
   const payload = data as { revoked?: boolean; already_revoked?: boolean } | null;
   if (!payload?.revoked && !payload?.already_revoked) {
     throw new Error("The invitation service returned an incomplete response.");
@@ -234,7 +256,7 @@ export async function acceptDressmakerInvitation(input: {
   const { data, error } = await requireSupabase().functions.invoke("accept-dressmaker-invitation", {
     body: input,
   });
-  if (error) throw new Error(readableError(error));
+  if (error) throw new Error(await readableFunctionError(error));
   if (!(data as { accepted?: boolean } | null)?.accepted) {
     throw new Error("This invitation could not be accepted.");
   }
