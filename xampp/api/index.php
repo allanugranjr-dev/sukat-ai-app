@@ -503,8 +503,17 @@ function invitationRedirectUrl(?string $value): string
     }
     $origin = strtolower($parts['scheme']) . '://' . strtolower($parts['host']) . (isset($parts['port']) ? ':' . $parts['port'] : '');
     $requestOriginValue = strtolower(requestOrigin());
+    global $config;
+    $canonicalParts = parse_url($config['public_app_url']);
+    $canonicalOrigin = strtolower(($canonicalParts['scheme'] ?? 'https') . '://' . ($canonicalParts['host'] ?? 'sukat-ai-app.vercel.app') . (isset($canonicalParts['port']) ? ':' . $canonicalParts['port'] : ''));
     $localOrigin = (bool) preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i', $origin);
-    if ($origin !== $requestOriginValue && !$localOrigin) throw new SukatApiException('The invitation redirect URL is not an allowed application origin.', 400);
+    if ($localOrigin) {
+        $path = $parts['path'] ?? '/';
+        $query = isset($parts['query']) ? '?' . $parts['query'] : '';
+        $fragment = isset($parts['fragment']) ? '#' . $parts['fragment'] : '';
+        return $config['public_app_url'] . $path . $query . $fragment;
+    }
+    if ($origin !== $requestOriginValue && $origin !== $canonicalOrigin) throw new SukatApiException('The invitation redirect URL is not an allowed application origin.', 400);
     return $base;
 }
 

@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const projectRoot = path.resolve(serverDirectory, "..");
+export const canonicalAppUrl = "https://sukat-ai-app.vercel.app";
 
 // Load the Node-specific files without touching the existing Supabase/XAMPP env files.
 for (const fileName of [".env.node", ".env.node.local"]) {
@@ -44,9 +45,11 @@ export const config = {
     twilioAccountSid: (process.env.TWILIO_ACCOUNT_SID ?? "").trim(),
     twilioAuthToken: (process.env.TWILIO_AUTH_TOKEN ?? "").trim(),
     twilioFromNumber: (process.env.TWILIO_FROM_NUMBER ?? "").trim(),
-    publicAppUrl: (process.env.SUKATAI_PUBLIC_APP_URL ?? "").trim().replace(/\/$/, ""),
+    publicAppUrl: (process.env.SUKATAI_PUBLIC_APP_URL ?? canonicalAppUrl).trim().replace(/\/$/, ""),
   },
   allowedOrigins: listEnv("SUKATAI_WEB_ORIGINS", [
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "http://127.0.0.1:3001",

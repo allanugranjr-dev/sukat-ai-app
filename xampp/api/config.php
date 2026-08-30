@@ -8,6 +8,7 @@ function sukatEnvironment(string $name, string $fallback): string
 }
 
 return [
+    'public_app_url' => rtrim(sukatEnvironment('SUKATAI_PUBLIC_APP_URL', 'https://sukat-ai-app.vercel.app'), '/'),
     'db_host' => sukatEnvironment('SUKATAI_DB_HOST', '127.0.0.1'),
     'db_port' => sukatEnvironment('SUKATAI_DB_PORT', '3306'),
     'db_name' => sukatEnvironment('SUKATAI_DB_NAME', 'sukatai'),

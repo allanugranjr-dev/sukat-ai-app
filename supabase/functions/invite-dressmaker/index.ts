@@ -1,9 +1,11 @@
 import { adminClient, AuthRequiredError, randomToken, requireUser, sha256 } from "../_shared/auth.ts";
 import { corsHeaders, jsonResponse, optionsResponse } from "../_shared/cors.ts";
 
+const canonicalAppUrl = "https://sukat-ai-app.vercel.app";
+
 function allowedInvitationOrigins(): string[] {
   const configured = Deno.env.get("INVITATION_ALLOWED_ORIGINS")?.trim() || Deno.env.get("SUPABASE_SITE_URL")?.trim() || "";
-  return [...configured.split(","), "https://sukat-ai-app.vercel.app"].map((value) => {
+  return [...configured.split(","), canonicalAppUrl].map((value) => {
     try {
       const url = new URL(value.trim());
       return ["http:", "https:"].includes(url.protocol) ? url.origin : "";
@@ -30,7 +32,7 @@ Deno.serve(async (request) => {
     }
     const email = body.email?.trim().toLowerCase() ?? "";
     const organizationId = body.organizationId?.trim() ?? "";
-    if (!email || !organizationId || !body.redirectTo) return jsonResponse({ error: "Email, organization, and redirect URL are required." }, 400);
+    if (!email || !organizationId) return jsonResponse({ error: "Email and organization are required." }, 400);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return jsonResponse({ error: "Enter a valid email address." }, 400);
 
     const { data: organization, error: organizationError } = await client.from("organizations").select("id").eq("id", organizationId).single();
@@ -38,11 +40,14 @@ Deno.serve(async (request) => {
 
     let redirectUrl: URL;
     try {
-      redirectUrl = new URL(body.redirectTo, request.url);
+      redirectUrl = new URL(body.redirectTo || `${canonicalAppUrl}/`, request.url);
     } catch {
       return jsonResponse({ error: "The invitation redirect URL is invalid." }, 400);
     }
     if (!['http:', 'https:'].includes(redirectUrl.protocol)) return jsonResponse({ error: "The invitation redirect URL is invalid." }, 400);
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(redirectUrl.origin)) {
+      redirectUrl = new URL(`${redirectUrl.pathname}${redirectUrl.search}${redirectUrl.hash}`, `${canonicalAppUrl}/`);
+    }
     const allowedOrigins = allowedInvitationOrigins();
     if (allowedOrigins.length === 0) return jsonResponse({ error: "Invitation redirect origins are not configured on the server." }, 500);
     if (!allowedOrigins.includes(redirectUrl.origin)) return jsonResponse({ error: "The invitation redirect URL is not an allowed application origin." }, 400);

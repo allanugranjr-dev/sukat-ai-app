@@ -9,7 +9,7 @@ import express from "express";
 import multer from "multer";
 import { Server } from "socket.io";
 
-import { config } from "./config.mjs";
+import { canonicalAppUrl, config } from "./config.mjs";
 import {
   closeDatabase,
   execute,
@@ -584,12 +584,16 @@ function requestOrigin(req) {
 function invitationRedirectUrl(req, value) {
   let redirect;
   try {
-    redirect = new URL(value || `${requestOrigin(req)}/`, requestOrigin(req));
+    redirect = new URL(value || `${canonicalAppUrl}/`, requestOrigin(req));
   } catch {
     throw new ApiError("The invitation redirect URL is invalid.", 400);
   }
+  const localOrigin = /^(https?:\/\/)(localhost|127\.0\.0\.1)(:\d+)?$/i.test(redirect.origin);
+  if (localOrigin) {
+    redirect = new URL(`${redirect.pathname}${redirect.search}${redirect.hash}`, `${canonicalAppUrl}/`);
+  }
   const configuredOrigin = config.notifications.publicAppUrl ? new URL(config.notifications.publicAppUrl).origin : null;
-  const allowed = new Set([requestOrigin(req), configuredOrigin, ...config.allowedOrigins].filter(Boolean));
+  const allowed = new Set([canonicalAppUrl, requestOrigin(req), configuredOrigin, ...config.allowedOrigins].filter(Boolean));
   if (!['http:', 'https:'].includes(redirect.protocol) || !allowed.has(redirect.origin)) {
     throw new ApiError("The invitation redirect URL is not an allowed application origin.", 400);
   }
