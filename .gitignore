@@ -13,3 +13,5 @@ supabase/.temp/
 supabase/.branches/
 .DS_Store
 coverage
+
+.vercel
