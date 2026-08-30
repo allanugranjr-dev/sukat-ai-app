@@ -935,6 +935,7 @@ function ScanResults({ scanId, onRecapture, onDashboard }: { scanId: string; onR
   };
   const panelId = `${tabsId}-panel`;
   const reviewSent = bundle.scan.status === "ready_for_review" || bundle.scan.status === "verified";
+/* Keep the reviewed table-linking render below. */
   return <div className="results-layout"><Panel className="results-viewer"><div className="viewer-top"><div><p className="eyebrow">SCAN {bundle.scan.id.slice(0, 8).toUpperCase()}</p><h2>3D body model</h2><p className="viewer-subtitle">Explore the generated form, then use the measurements for review.</p></div><StatusBadge status={bundle.scan.status} /></div><ModelViewer model={bundle.bodyModel} measurements={bundle.measurements} heightValue={bundle.scan.height_value} heightUnit={bundle.scan.height_unit} /><div className="viewer-note"><Icon name="lock" size={14} /> Model assets are available only through authorized access.</div></Panel><Panel className="results-panel"><div className="results-summary"><span className="result-summary-icon"><Icon name="ruler" size={23} /></span><div className="results-summary-content"><div className="results-summary-heading"><Badge tone={localDemo ? "warning" : "teal"} dot>{bundle.measurements.length > 0 ? localDemo ? "LOCAL DEMO RESULT" : "PROVIDER RESULT" : "RESULT PENDING"}</Badge><span>{bundle.measurements.length} values returned</span></div><h3>{bundle.measurements.length > 0 ? localDemo ? "Illustrative measurements are ready" : "Measurements are ready to review" : "No measurements yet"}</h3><p>{bundle.measurements.length > 0 ? localDemo ? "This local demo uses a deterministic template. Have a dressmaker verify the estimates before tailoring." : "Review the values below before sending them to your dressmaker." : "The provider has not returned a valid measurement set for this scan."}</p></div></div>{bundle.measurements.length > 0 && <MeasurementHighlights measurements={bundle.measurements} selectedId={selectedMeasurementId} onSelect={(measurement) => { setSelectedMeasurementId(measurement.id); setTab("measurements"); }} />}<div className="results-tabs" role="tablist" aria-label="Scan result details">{resultTabOptions.map((option, index) => <button key={option.key} id={`${tabsId}-${option.key}`} type="button" role="tab" aria-selected={tab === option.key} aria-controls={panelId} tabIndex={tab === option.key ? 0 : -1} className={tab === option.key ? "active" : ""} onClick={() => setTab(option.key)} onKeyDown={(event) => onTabKeyDown(event, index)}>{option.label}</button>)}</div><div id={panelId} role="tabpanel" tabIndex={0} aria-labelledby={`${tabsId}-${tab}`} className="results-tab-panel">{tab === "measurements" && <>{bundle.measurements.length === 0 ? <DataState icon="ruler" title="Waiting for valid measurements" body="This view stays empty until local processing or a configured reconstruction provider returns values that pass validation." /> : <><dl className="result-facts"><div><dt>Measurements</dt><dd>{bundle.measurements.length}</dd></div><div><dt>Height reference</dt><dd>{bundle.scan.height_value === null ? "Not provided" : `${bundle.scan.height_value} ${bundle.scan.height_unit === "cm" ? "cm" : "in"}`}</dd></div><div><dt>Average confidence</dt><dd>{averageConfidence !== null && Number.isFinite(averageConfidence) ? `${averageConfidence.toFixed(0)}%` : "Not reported"}</dd></div></dl><MeasurementTable measurements={bundle.measurements} selectedId={selectedMeasurementId} /></>}</>}{tab === "photos" && <PrivatePhotos assets={bundle.assets} />}{tab === "activity" && <ScanActivity scan={bundle.scan} />}</div></Panel><div className="results-actions"><div className="results-action-meta"><span className="action-tip"><Icon name="shield" size={15} /> Review before sharing</span><span className="action-tip"><Icon name="clock" size={15} /> Updated {formatDate(bundle.scan.updated_at)}</span></div><div className="result-action-error">{actionError && <InlineError message={actionError} />}</div><div className="result-buttons"><Button onClick={() => void sendToReview()} disabled={actionBusy || bundle.measurements.length === 0 || reviewSent} icon="arrow-right">{reviewSent ? "Sent to tailor review" : "Send to tailor review"}</Button><Button variant="secondary" onClick={() => void requestRecapture()} disabled={actionBusy} icon="refresh">Request recapture</Button><Button variant="ghost" onClick={onDashboard}>Dashboard</Button></div></div></div>;
 }
 
@@ -995,8 +996,62 @@ function measurementRatio(measurements: Measurement[], key: string, baseline: nu
   return match && Number.isFinite(match.value) ? clampNumber(match.value / baseline, 0.82, 1.22) : 1;
 }
 
+function measurementGuideKey(key: string): string {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  if (normalized.includes("height") || normalized.includes("stature")) return "height";
+  if (normalized.includes("inseam") || normalized.includes("inside_leg")) return "inseam";
+  if (normalized.includes("forearm")) return "forearm";
+  if (normalized.includes("upper_arm") || normalized.includes("bicep") || normalized === "arm") return "upper_arm";
+  if (normalized.includes("shoulder")) return "shoulder";
+  if (normalized.includes("head")) return "head";
+  if (normalized.includes("neck")) return "neck";
+  if (normalized.includes("bust") || normalized.includes("chest")) return "chest";
+  if (normalized.includes("waist")) return "waist";
+  if (normalized.includes("hip")) return "hip";
+  if (normalized.includes("thigh")) return "thigh";
+  if (normalized.includes("calf")) return "calf";
+  if (normalized.includes("wrist")) return "wrist";
+  return normalized;
+}
+
+function createScanSuitTexture(three: ThreeModule): THREE.CanvasTexture | null {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const gradient = context.createLinearGradient(0, 0, 256, 256);
+  gradient.addColorStop(0, "#24415d");
+  gradient.addColorStop(0.48, "#172d47");
+  gradient.addColorStop(1, "#0d2038");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 256, 256);
+  context.strokeStyle = "rgba(126, 215, 211, .12)";
+  context.lineWidth = 1;
+  for (let offset = -256; offset < 512; offset += 18) {
+    context.beginPath();
+    context.moveTo(offset, 0);
+    context.lineTo(offset + 256, 256);
+    context.stroke();
+  }
+  context.strokeStyle = "rgba(255, 255, 255, .065)";
+  for (let offset = 8; offset < 256; offset += 32) {
+    context.beginPath();
+    context.moveTo(offset, 0);
+    context.lineTo(offset, 256);
+    context.stroke();
+  }
+  const texture = new three.CanvasTexture(canvas);
+  texture.colorSpace = three.SRGBColorSpace;
+  texture.wrapS = three.RepeatWrapping;
+  texture.wrapT = three.RepeatWrapping;
+  texture.repeat.set(1.7, 2.6);
+  return texture;
+}
+
 function addBodySphere(three: ThreeModule, group: THREE.Group, position: [number, number, number], scale: [number, number, number], material: THREE.Material) {
-  const mesh = new three.Mesh(new three.SphereGeometry(1, 20, 14), material);
+  const mesh = new three.Mesh(new three.SphereGeometry(1, 28, 20), material);
   mesh.position.set(...position);
   mesh.scale.set(...scale);
   mesh.castShadow = true;
@@ -1110,17 +1165,43 @@ function ellipseRadiiForCircumference(circumferenceCm: number, depthRatio: numbe
 }
 
 function createMeasuredSurface(three: ThreeModule, group: THREE.Group, rings: MeasuredBodyRing[], material: THREE.Material) {
-  const segments = 40;
+  const segments = 64;
+  const smoothRings: MeasuredBodyRing[] = [];
+  rings.forEach((ring, index) => {
+    if (index === 0) {
+      smoothRings.push(ring);
+      return;
+    }
+    const previous = rings[index - 1];
+    const next = rings[index + 1] ?? ring;
+    const previousSpan = ring.y - previous.y;
+    const nextSpan = next.y - ring.y;
+    const steps = index === rings.length - 1 ? 1 : 3;
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps;
+      const y = ring.y + (next.y - ring.y) * t;
+      const blend = (1 - Math.cos(t * Math.PI)) / 2;
+      const width = ring.width + (next.width - ring.width) * blend;
+      const depth = ring.depth + (next.depth - ring.depth) * blend;
+      const tangent = (next.width - previous.width) / Math.max(previousSpan + nextSpan, 0.001);
+      smoothRings.push({ x: (ring.x ?? 0) + tangent * (y - ring.y) * 0.06, y, width, depth, z: ring.z });
+    }
+  });
+  if (smoothRings.length < 2) return null;
   const positions: number[] = [];
+  const uvs: number[] = [];
   const indices: number[] = [];
   const ringVertex = (ringIndex: number, segment: number) => ringIndex * segments + (segment % segments);
-  rings.forEach((ring) => {
+  const minY = smoothRings[0].y;
+  const maxY = smoothRings[smoothRings.length - 1].y;
+  smoothRings.forEach((ring) => {
     for (let segment = 0; segment < segments; segment += 1) {
       const angle = (segment / segments) * Math.PI * 2;
       positions.push((ring.x ?? 0) + ring.width * Math.cos(angle), ring.y, (ring.z ?? 0) + ring.depth * Math.sin(angle));
+      uvs.push(segment / segments, (ring.y - minY) / Math.max(maxY - minY, 0.001));
     }
   });
-  for (let ringIndex = 0; ringIndex < rings.length - 1; ringIndex += 1) {
+  for (let ringIndex = 0; ringIndex < smoothRings.length - 1; ringIndex += 1) {
     for (let segment = 0; segment < segments; segment += 1) {
       const current = ringVertex(ringIndex, segment);
       const next = ringVertex(ringIndex, segment + 1);
@@ -1132,7 +1213,7 @@ function createMeasuredSurface(three: ThreeModule, group: THREE.Group, rings: Me
   const bottomCenter = positions.length / 3;
   positions.push(rings[0].x ?? 0, rings[0].y, rings[0].z ?? 0);
   const topCenter = positions.length / 3;
-  const topRing = rings[rings.length - 1];
+  const topRing = smoothRings[smoothRings.length - 1];
   positions.push(topRing.x ?? 0, topRing.y, topRing.z ?? 0);
   for (let segment = 0; segment < segments; segment += 1) {
     indices.push(bottomCenter, ringVertex(0, segment), ringVertex(0, segment + 1));
@@ -1140,6 +1221,7 @@ function createMeasuredSurface(three: ThreeModule, group: THREE.Group, rings: Me
   }
   const geometry = new three.BufferGeometry();
   geometry.setAttribute("position", new three.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute("uv", new three.BufferAttribute(new Float32Array(uvs), 2));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
   const mesh = new three.Mesh(geometry, material);
@@ -1153,26 +1235,31 @@ function addMeasuredLimb(three: ThreeModule, group: THREE.Group, start: THREE.Ve
   const direction = new three.Vector3().subVectors(end, start);
   const length = direction.length();
   if (!length) return null;
-  const mesh = new three.Mesh(new three.CylinderGeometry(endRadius, startRadius, length, 24, 1), material);
+  const mesh = new three.Mesh(new three.CylinderGeometry(endRadius, startRadius, length, 32, 4), material);
   mesh.position.copy(start).add(end).multiplyScalar(0.5);
   mesh.quaternion.setFromUnitVectors(new three.Vector3(0, 1, 0), direction.normalize());
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   group.add(mesh);
+  const startCap = addBodySphere(three, group, start.toArray() as [number, number, number], [startRadius, startRadius, startRadius], material);
+  const endCap = addBodySphere(three, group, end.toArray() as [number, number, number], [endRadius, endRadius, endRadius], material);
+  startCap.renderOrder = 1;
+  endCap.renderOrder = 1;
   return mesh;
 }
 
-function addMeasuredGuideLine(three: ThreeModule, group: THREE.Group, points: THREE.Vector3[], color: number) {
+function addMeasuredGuideLine(three: ThreeModule, group: THREE.Group, points: THREE.Vector3[], color: number, key?: string) {
   const line = new three.Line(
     new three.BufferGeometry().setFromPoints(points),
     new three.LineBasicMaterial({ color, transparent: true, opacity: 0.96, depthTest: false, depthWrite: false }),
   );
   line.renderOrder = 4;
   line.frustumCulled = false;
+  if (key) line.userData.measurementKey = key;
   group.add(line);
 }
 
-function addMeasuredEllipseGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, radii: [number, number], color: number) {
+function addMeasuredEllipseGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, radii: [number, number], color: number, key?: string) {
   const points: THREE.Vector3[] = [];
   for (let index = 0; index < 64; index += 1) {
     const angle = (index / 64) * Math.PI * 2;
@@ -1184,10 +1271,11 @@ function addMeasuredEllipseGuide(three: ThreeModule, group: THREE.Group, center:
   );
   line.renderOrder = 4;
   line.frustumCulled = false;
+  if (key) line.userData.measurementKey = key;
   group.add(line);
 }
 
-function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, start: THREE.Vector3, end: THREE.Vector3, radius: number, color: number) {
+function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, start: THREE.Vector3, end: THREE.Vector3, radius: number, color: number, key?: string) {
   const axis = new three.Vector3().subVectors(end, start).normalize();
   const reference = Math.abs(axis.y) < 0.9 ? new three.Vector3(0, 1, 0) : new three.Vector3(1, 0, 0);
   const basisA = new three.Vector3().crossVectors(axis, reference).normalize();
@@ -1203,6 +1291,7 @@ function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: TH
   );
   line.renderOrder = 4;
   line.frustumCulled = false;
+  if (key) line.userData.measurementKey = key;
   group.add(line);
 }
 
@@ -1210,8 +1299,9 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
   const root = new three.Group();
   const body = new three.Group();
   const guides = new three.Group();
-  const bodyMaterial = new three.MeshStandardMaterial({ color: 0xc2d2e8, roughness: 0.44, metalness: 0.02, emissive: 0x162844, emissiveIntensity: 0.2 });
-  const jointMaterial = new three.MeshStandardMaterial({ color: 0xa8bddc, roughness: 0.52, metalness: 0.02, emissive: 0x10213b, emissiveIntensity: 0.15 });
+  const suitTexture = createScanSuitTexture(three);
+  const bodyMaterial = new three.MeshPhysicalMaterial({ color: 0x9db5d1, map: suitTexture, roughness: 0.34, metalness: 0.04, clearcoat: 0.2, clearcoatRoughness: 0.24, sheen: 0.3, sheenColor: 0x66d8d2, emissive: 0x10243d, emissiveIntensity: 0.14 });
+  const jointMaterial = new three.MeshPhysicalMaterial({ color: 0x7995b7, roughness: 0.48, metalness: 0.03, clearcoat: 0.14, clearcoatRoughness: 0.3, emissive: 0x0d1c31, emissiveIntensity: 0.1 });
   const featureMaterial = new three.MeshStandardMaterial({ color: 0x17253a, roughness: 0.34, metalness: 0.02 });
   const modelUnitsPerCm = MODEL_UNITS_PER_CM;
   const heightCm = clampNumber(modelHeightCm(heightValue, heightUnit), 120, 230);
@@ -1250,16 +1340,22 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
 
   root.add(body, guides);
   createMeasuredSurface(three, body, [
+    { y: height * 0.45, width: hipRadii[0] * 0.7, depth: hipRadii[1] * 0.7 },
     { y: height * 0.47, width: hipRadii[0] * 0.84, depth: hipRadii[1] * 0.84 },
     { y: hipY, width: hipRadii[0], depth: hipRadii[1] },
-    { y: height * 0.57, width: waistRadii[0] * 1.06, depth: waistRadii[1] * 1.04 },
+    { y: height * 0.55, width: waistRadii[0] * 1.08, depth: waistRadii[1] * 1.06 },
+    { y: height * 0.58, width: waistRadii[0] * 1.03, depth: waistRadii[1] * 1.02 },
     { y: waistY, width: waistRadii[0], depth: waistRadii[1] },
+    { y: height * 0.65, width: waistRadii[0] * 1.04, depth: waistRadii[1] * 1.02 },
     { y: chestY, width: chestRadii[0], depth: chestRadii[1] },
-    { y: height * 0.74, width: chestRadii[0] * 0.98, depth: chestRadii[1] * 0.94 },
+    { y: height * 0.72, width: chestRadii[0] * 1.02, depth: chestRadii[1] * 0.98 },
+    { y: height * 0.75, width: chestRadii[0] * 0.98, depth: chestRadii[1] * 0.94 },
     { y: shoulderY, width: Math.max(chestRadii[0] * 0.94, shoulderHalf * 0.83), depth: chestRadii[1] * 0.88 },
+    { y: height * 0.79, width: neckRadii[0] * 1.16, depth: neckRadii[1] * 1.14 },
   ], bodyMaterial);
   createMeasuredSurface(three, body, [
-    { y: height * 0.78, width: neckRadii[0] * 1.06, depth: neckRadii[1] * 1.06 },
+    { y: height * 0.79, width: neckRadii[0] * 1.16, depth: neckRadii[1] * 1.14 },
+    { y: height * 0.81, width: neckRadii[0] * 1.06, depth: neckRadii[1] * 1.06 },
     { y: height * 0.84, width: neckRadii[0], depth: neckRadii[1] },
     { y: height * 0.87, width: neckRadii[0], depth: neckRadii[1] },
   ], bodyMaterial);
@@ -1315,26 +1411,26 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
   addBodySphere(three, body, [leftAnkle.x, height * 0.035, footLengthRadius * 0.52], [footWidthRadius, height * 0.035, footLengthRadius], bodyMaterial);
   addBodySphere(three, body, [rightAnkle.x, height * 0.035, footLengthRadius * 0.52], [footWidthRadius, height * 0.035, footLengthRadius], bodyMaterial);
 
-  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, height * 0.84, 0), neckRadii, 0x9e9cff);
-  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, headY, 0), headRadii, 0x72e56f);
-  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, chestY, 0), chestRadii, 0x60e8d7);
-  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, waistY, 0), waistRadii, 0x71dbe6);
-  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, hipGuideY, 0), hipRadii, 0xf1d33b);
-  addMeasuredLimbGuide(three, guides, leftShoulder.clone().lerp(leftElbow, 0.5), leftShoulder, leftElbow, bicepRadius, 0x74d96e);
-  addMeasuredLimbGuide(three, guides, rightShoulder.clone().lerp(rightElbow, 0.5), rightShoulder, rightElbow, bicepRadius, 0x74d96e);
-  addMeasuredLimbGuide(three, guides, leftElbow.clone().lerp(leftWrist, 0.5), leftElbow, leftWrist, forearmRadius, 0xe969ad);
-  addMeasuredLimbGuide(three, guides, rightElbow.clone().lerp(rightWrist, 0.5), rightElbow, rightWrist, forearmRadius, 0xe969ad);
-  addMeasuredLimbGuide(three, guides, leftHip.clone().lerp(leftKnee, 0.46), leftHip, leftKnee, thighRadius, 0xc3d2e3);
-  addMeasuredLimbGuide(three, guides, rightHip.clone().lerp(rightKnee, 0.46), rightHip, rightKnee, thighRadius, 0xc3d2e3);
-  addMeasuredLimbGuide(three, guides, leftKnee.clone().lerp(leftAnkle, 0.5), leftKnee, leftAnkle, calfRadius, 0x5bd6e2);
-  addMeasuredLimbGuide(three, guides, rightKnee.clone().lerp(rightAnkle, 0.5), rightKnee, rightAnkle, calfRadius, 0x5bd6e2);
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, height * 0.84, 0), neckRadii, 0x9e9cff, "neck");
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, headY, 0), headRadii, 0x72e56f, "head");
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, chestY, 0), chestRadii, 0x60e8d7, "chest");
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, waistY, 0), waistRadii, 0x71dbe6, "waist");
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, hipGuideY, 0), hipRadii, 0xf1d33b, "hip");
+  addMeasuredLimbGuide(three, guides, leftShoulder.clone().lerp(leftElbow, 0.5), leftShoulder, leftElbow, bicepRadius, 0x74d96e, "upper_arm");
+  addMeasuredLimbGuide(three, guides, rightShoulder.clone().lerp(rightElbow, 0.5), rightShoulder, rightElbow, bicepRadius, 0x74d96e, "upper_arm");
+  addMeasuredLimbGuide(three, guides, leftElbow.clone().lerp(leftWrist, 0.5), leftElbow, leftWrist, forearmRadius, 0xe969ad, "forearm");
+  addMeasuredLimbGuide(three, guides, rightElbow.clone().lerp(rightWrist, 0.5), rightElbow, rightWrist, forearmRadius, 0xe969ad, "forearm");
+  addMeasuredLimbGuide(three, guides, leftHip.clone().lerp(leftKnee, 0.46), leftHip, leftKnee, thighRadius, 0xc3d2e3, "thigh");
+  addMeasuredLimbGuide(three, guides, rightHip.clone().lerp(rightKnee, 0.46), rightHip, rightKnee, thighRadius, 0xc3d2e3, "thigh");
+  addMeasuredLimbGuide(three, guides, leftKnee.clone().lerp(leftAnkle, 0.5), leftKnee, leftAnkle, calfRadius, 0x5bd6e2, "calf");
+  addMeasuredLimbGuide(three, guides, rightKnee.clone().lerp(rightAnkle, 0.5), rightKnee, rightAnkle, calfRadius, 0x5bd6e2, "calf");
   const guideDepth = Math.max(chestRadii[1], hipRadii[1]) + 0.18;
-  addMeasuredGuideLine(three, guides, [new three.Vector3(-shoulderHalf, shoulderY, guideDepth), new three.Vector3(shoulderHalf, shoulderY, guideDepth)], 0x64e4d3);
+  addMeasuredGuideLine(three, guides, [new three.Vector3(-shoulderHalf, shoulderY, guideDepth), new three.Vector3(shoulderHalf, shoulderY, guideDepth)], 0x64e4d3, "shoulder");
   const heightGuideX = Math.max(shoulderHalf, chestRadii[0]) + 0.42;
-  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX, 0.02, guideDepth), new three.Vector3(heightGuideX, height, guideDepth)], 0xf04fc5);
-  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX - 0.08, 0.02, guideDepth), new three.Vector3(heightGuideX + 0.08, 0.02, guideDepth)], 0xf04fc5);
-  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX - 0.08, height, guideDepth), new three.Vector3(heightGuideX + 0.08, height, guideDepth)], 0xf04fc5);
-  addMeasuredGuideLine(three, guides, [new three.Vector3(-leftLegX * 0.2, crotchY, guideDepth), new three.Vector3(-leftLegX * 0.2, ankleY, guideDepth)], 0xea4fc0);
+  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX, 0.02, guideDepth), new three.Vector3(heightGuideX, height, guideDepth)], 0xf04fc5, "height");
+  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX - 0.08, 0.02, guideDepth), new three.Vector3(heightGuideX + 0.08, 0.02, guideDepth)], 0xf04fc5, "height");
+  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX - 0.08, height, guideDepth), new three.Vector3(heightGuideX + 0.08, height, guideDepth)], 0xf04fc5, "height");
+  addMeasuredGuideLine(three, guides, [new three.Vector3(-leftLegX * 0.2, crotchY, guideDepth), new three.Vector3(-leftLegX * 0.2, ankleY, guideDepth)], 0xea4fc0, "inseam");
   return { root, guides };
 }
 
@@ -1343,21 +1439,27 @@ function disposeThreeScene(scene: THREE.Scene) {
     const renderable = object as unknown as { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] };
     renderable.geometry?.dispose();
     const materials = Array.isArray(renderable.material) ? renderable.material : renderable.material ? [renderable.material] : [];
-    materials.forEach((material) => material.dispose());
+    materials.forEach((material) => {
+      const materialWithMap = material as THREE.Material & { map?: THREE.Texture };
+      materialWithMap.map?.dispose();
+      material.dispose();
+    });
   });
 }
 
-function InteractiveBodyModel({ referenceImage, measurements = [], heightValue = null, heightUnit = "cm" }: { referenceImage: string; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin" }) {
+function InteractiveBodyModel({ referenceImage, measurements = [], heightValue = null, heightUnit = "cm", focusedMeasurementKey = null }: { referenceImage: string; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin"; focusedMeasurementKey?: string | null }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controlsRef = useRef<OrbitControlsType | null>(null);
   const guidesRef = useRef<THREE.Group | null>(null);
   const renderRequestRef = useRef<(() => void) | null>(null);
   const reducedMotionRef = useRef(false);
+  const hasUserInteractedRef = useRef(false);
   const [viewerState, setViewerState] = useState<"loading" | "ready" | "fallback">("loading");
   const [autoRotate, setAutoRotate] = useState(false);
   const [showGuides, setShowGuides] = useState(true);
   const [reducedMotion, setReducedMotion] = useState(() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const instructionsId = useId();
+  const focusStatusId = useId();
   const measurementSignature = measurements.map((measurement) => `${measurement.key}:${measurement.value}:${measurement.adjusted_value ?? ""}:${measurement.unit}`).join("|");
 
   useEffect(() => {
@@ -1385,6 +1487,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
     const canvas = canvasRef.current;
     const host = canvas?.parentElement;
     if (!canvas || !host) return () => { active = false; };
+    hasUserInteractedRef.current = false;
     setViewerState("loading");
 
     const setup = async () => {
@@ -1400,7 +1503,10 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
           if (active) setViewerState("fallback");
         };
         renderer.outputColorSpace = three.SRGBColorSpace;
-        renderer.shadowMap.enabled = false;
+        renderer.toneMapping = three.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.08;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = three.PCFSoftShadowMap;
         renderer.setClearColor(0x07111f, 1);
         scene = new three.Scene();
         scene.fog = new three.Fog(0x07111f, 8, 15);
@@ -1413,6 +1519,8 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         controls.enablePan = false;
         controls.enableZoom = true;
         controls.zoomSpeed = 0.75;
+        controls.rotateSpeed = 0.62;
+        controls.screenSpacePanning = false;
         controls.minDistance = clampNumber(modelHeight * 0.88, 3.75, 5.1);
         controls.maxDistance = clampNumber(modelHeight * 2.15, 8.5, 13);
         controls.minPolarAngle = Math.PI * 0.28;
@@ -1422,16 +1530,28 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         controls.autoRotateSpeed = 0.8;
         controlsRef.current = controls;
 
-        scene.add(new three.HemisphereLight(0xbad6ff, 0x102438, 1.9));
-        const keyLight = new three.DirectionalLight(0xffffff, 2.7);
+        scene.add(new three.HemisphereLight(0xbad6ff, 0x102438, 1.75));
+        const keyLight = new three.DirectionalLight(0xffffff, 3.2);
         keyLight.position.set(3.4, 6, 5.2);
+        keyLight.castShadow = true;
+        keyLight.shadow.mapSize.set(1024, 1024);
+        keyLight.shadow.camera.near = 0.5;
+        keyLight.shadow.camera.far = 16;
+        keyLight.shadow.camera.left = -4;
+        keyLight.shadow.camera.right = 4;
+        keyLight.shadow.camera.top = 7;
+        keyLight.shadow.camera.bottom = -1;
         scene.add(keyLight);
-        const rimLight = new three.PointLight(0x25d5d0, 8, 8, 2);
+        const fillLight = new three.PointLight(0x557fd2, 4.2, 10, 2);
+        fillLight.position.set(-4, 3.5, 3.5);
+        scene.add(fillLight);
+        const rimLight = new three.PointLight(0x25d5d0, 9, 9, 2);
         rimLight.position.set(-3.4, 2.5, -1.6);
         scene.add(rimLight);
 
         const floor = new three.Mesh(new three.PlaneGeometry(10, 10), new three.MeshStandardMaterial({ color: 0x07111f, roughness: 0.95, metalness: 0.02 }));
         floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
         scene.add(floor);
         const grid = new three.GridHelper(8, 18, 0x2a6875, 0x173344);
         grid.position.y = 0.012;
@@ -1443,6 +1563,26 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         guidesRef.current = bodyScene.guides;
         bodyScene.guides.visible = showGuides;
         scene.add(bodyScene.root);
+        const fitCameraToModel = () => {
+          if (!renderer || !controls) return;
+          const bounds = new three.Box3().setFromObject(bodyScene.root);
+          const size = bounds.getSize(new three.Vector3());
+          const center = bounds.getCenter(new three.Vector3());
+          const verticalFov = three.MathUtils.degToRad(camera.fov);
+          const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.1));
+          const verticalDistance = size.y / (2 * Math.tan(verticalFov / 2));
+          const horizontalDistance = size.x / (2 * Math.tan(horizontalFov / 2));
+          const depthDistance = size.z * 0.9;
+          const distance = Math.max(verticalDistance, horizontalDistance, depthDistance) * 1.2;
+          camera.position.set(center.x, center.y, center.z + distance);
+          controls.target.copy(center);
+          controls.minDistance = clampNumber(distance * 0.55, 2.7, 5.1);
+          controls.maxDistance = clampNumber(distance * 2.1, 8.5, 14);
+          controls.update();
+          controls.saveState();
+        };
+        const onControlsStart = () => { hasUserInteractedRef.current = true; };
+        controls.addEventListener("start", onControlsStart);
 
         const resize = () => {
           if (!renderer || !scene) return;
@@ -1452,6 +1592,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
           camera.updateProjectionMatrix();
           renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.5));
           renderer.setSize(width, height, false);
+          if (!hasUserInteractedRef.current) fitCameraToModel();
         };
         const renderFrame = () => {
           if (!active || document.hidden || !renderer || !scene || !controls) return;
@@ -1482,6 +1623,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
           canvas.removeEventListener("webglcontextlost", handleContextLost, false);
           observer?.disconnect();
           controls?.removeEventListener("change", requestRender);
+          controls?.removeEventListener("start", onControlsStart);
         };
         canvas.addEventListener("webglcontextlost", handleContextLost, false);
         requestRender();
@@ -1522,6 +1664,26 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
     renderRequestRef.current?.();
   }, [showGuides]);
 
+  useEffect(() => {
+    const guides = guidesRef.current;
+    if (!guides) return;
+    const focusedKey = focusedMeasurementKey ? measurementGuideKey(focusedMeasurementKey) : null;
+    guides.traverse((object) => {
+      const guideKey = object.userData.measurementKey as string | undefined;
+      if (!guideKey) return;
+      const material = object as unknown as { material?: THREE.Material | THREE.Material[] };
+      const materials = Array.isArray(material.material) ? material.material : material.material ? [material.material] : [];
+      const isFocused = focusedKey === guideKey;
+      object.scale.setScalar(isFocused ? 1.08 : 1);
+      object.renderOrder = isFocused ? 7 : 4;
+      materials.forEach((guideMaterial) => {
+        guideMaterial.transparent = true;
+        guideMaterial.opacity = focusedKey ? (isFocused ? 1 : 0.16) : 0.96;
+      });
+    });
+    renderRequestRef.current?.();
+  }, [focusedMeasurementKey, measurementSignature]);
+
   const handleCanvasKeyDown = (event: KeyboardEvent<HTMLCanvasElement>) => {
     const controls = controlsRef.current;
     if (!controls) return;
@@ -1537,18 +1699,25 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
     else if (event.key === "Home") { controls.reset(); }
     else { controls.enableDamping = damping; return; }
     event.preventDefault();
+    hasUserInteractedRef.current = true;
     controls.update();
     controls.enableDamping = damping;
     renderRequestRef.current?.();
   };
-  const zoomIn = () => { controlsRef.current?.dollyIn(1.12); controlsRef.current?.update(); renderRequestRef.current?.(); };
-  const zoomOut = () => { controlsRef.current?.dollyOut(1.12); controlsRef.current?.update(); renderRequestRef.current?.(); };
+  const zoomIn = () => { hasUserInteractedRef.current = true; controlsRef.current?.dollyIn(1.12); controlsRef.current?.update(); renderRequestRef.current?.(); };
+  const zoomOut = () => { hasUserInteractedRef.current = true; controlsRef.current?.dollyOut(1.12); controlsRef.current?.update(); renderRequestRef.current?.(); };
   const modelHeightLabel = heightValue === null || heightValue === undefined ? "170 cm reference height" : `${modelHeightCm(heightValue, heightUnit).toFixed(1)} cm tall`;
+  const focusedMeasurement = focusedMeasurementKey ? measurements.find((measurement) => measurement.key === focusedMeasurementKey) : undefined;
+  const focusedMeasurementLabel = focusedMeasurement ? `${displayMeasurementKey(focusedMeasurement.key)} · ${displayMeasurementValue(focusedMeasurement)}` : "No measurement guide selected";
 
+/* Keep the reviewed fallback-accessible render below. */
   return <div className="model-3d-viewer"><div className="model-3d-stage" aria-busy={viewerState === "loading"}><canvas ref={canvasRef} tabIndex={viewerState === "fallback" ? -1 : 0} aria-hidden={viewerState === "fallback"} aria-label="Interactive measurement-driven 3D body model" aria-describedby={instructionsId} onKeyDown={handleCanvasKeyDown} /><figure className="model-3d-reference"><img src={referenceImage} alt="" /><figcaption>Reference visual</figcaption></figure><div className="model-3d-scale" aria-label="Model scale summary"><strong>MEASURED PROPORTIONS</strong><span>{modelHeightLabel}</span><small>{measurements.length} result values mapped to the body</small></div>{viewerState === "loading" && <div className="model-3d-loading" role="status" aria-live="polite"><span className="model-3d-spinner" />Preparing measured body model…</div>}{viewerState === "fallback" && <div className="model-3d-fallback" role="status"><img src={referenceImage} alt="Reference visualization for the body measurement result" /><span>Interactive 3D is unavailable on this device. Showing the reference visual.</span></div>}<span className="model-preview-badge"><Icon name="scan" size={13} /> Measured body · interactive 3D</span></div><div className="model-3d-controls" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div><p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Drag to rotate · scroll or pinch to zoom · focus the model and use arrow keys, +/−, or Home</p>{reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}</div>;
+/* Alternative render from the mesh worker, intentionally omitted after reconciliation:
+  return <div className="model-3d-viewer"><div className="model-3d-stage" aria-busy={viewerState === "loading"}><canvas ref={canvasRef} tabIndex={0} aria-label="Interactive measurement-driven 3D body model" aria-describedby={`${instructionsId} ${focusStatusId}`} onKeyDown={handleCanvasKeyDown} /><figure className="model-3d-reference"><img src={referenceImage} alt="" /><figcaption>Reference visual</figcaption></figure><div className="model-3d-scale" aria-label="Model scale summary"><strong>MEASURED PROPORTIONS</strong><span>{modelHeightLabel}</span><small>{measurements.length} result values mapped to the body</small></div>{viewerState === "loading" && <div className="model-3d-loading" role="status" aria-live="polite"><span className="model-3d-spinner" />Preparing measured body model…</div>}{viewerState === "fallback" && <div className="model-3d-fallback"><img src={referenceImage} alt="Reference visualization for the body measurement result" /><span>Interactive 3D is unavailable on this device. Showing the reference visual.</span></div>}<span className="model-preview-badge"><Icon name="scan" size={13} /> Measured body · interactive 3D</span><p className={cn("model-3d-focus-status", focusedMeasurement && "active")} id={focusStatusId} role="status" aria-live="polite">{focusedMeasurement ? `Focused guide: ${focusedMeasurementLabel}` : "Select a measurement card to focus its guide."}</p></div><div className="model-3d-controls" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { hasUserInteractedRef.current = true; controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div><p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Drag to rotate · scroll or pinch to zoom · focus the model and use arrow keys, +/−, or Home</p>{reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}</div>;
+*/
 }
 
-function ModelViewer({ model, measurements = [], heightValue = null, heightUnit = "cm" }: { model: ScanBundle["bodyModel"]; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin" }) {
+function ModelViewer({ model, measurements = [], heightValue = null, heightUnit = "cm", focusedMeasurementKey = null }: { model: ScanBundle["bodyModel"]; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin"; focusedMeasurementKey?: string | null }) {
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [assetError, setAssetError] = useState("");
   const localPreview = localPreviewData(model);
@@ -1565,9 +1734,9 @@ function ModelViewer({ model, measurements = [], heightValue = null, heightUnit 
   }, [model?.id, model?.status, model?.model_url_or_path]);
   if (localPreview) {
     const referenceImage = localPreviewPath(localPreview.reference_image) ?? LOCAL_REFERENCE_IMAGE;
-    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel referenceImage={referenceImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN MODEL</p><h3>Human-shaped reference, mapped from the result</h3><p>The body shape uses the returned height and measurements in centimetres, and each visible guide follows the matching circumference or length. This is a visual fit model, not a scan-grade mesh; local demo values must be verified by a dressmaker.</p><Badge tone="warning">Measured visualization · verify before tailoring</Badge></div></div></div>;
+    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel referenceImage={referenceImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN MODEL</p><h3>Human-shaped reference, mapped from the result</h3><p>The body shape uses the returned height and measurements in centimetres, and each visible guide follows the matching circumference or length. This is a visual fit model, not a scan-grade mesh; local demo values must be verified by a dressmaker.</p><Badge tone="warning">Measured visualization · verify before tailoring</Badge></div></div></div>;
   }
-  if (!model || model.status !== "ready" || !model.model_url_or_path || assetError) return <div className="model-empty model-empty-preview"><InteractiveBodyModel referenceImage={LOCAL_REFERENCE_IMAGE} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN PREVIEW</p><h3>Interactive 3D body model</h3><p>{assetError || "A human-shaped reference model is proportioned from the returned measurements while a provider-specific mesh is unavailable."}</p><Badge tone="teal">Result values mapped to guides</Badge></div></div></div>;
+  if (!model || model.status !== "ready" || !model.model_url_or_path || assetError) return <div className="model-empty model-empty-preview"><InteractiveBodyModel referenceImage={LOCAL_REFERENCE_IMAGE} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN PREVIEW</p><h3>Interactive 3D body model</h3><p>{assetError || "A human-shaped reference model is proportioned from the returned measurements while a provider-specific mesh is unavailable."}</p><Badge tone="teal">Result values mapped to guides</Badge></div></div></div>;
   return <div className="model-ready"><span className="model-empty-icon"><Icon name="expand" size={27} /></span><h3>{assetUrl ? "Body model asset available" : "Opening private model asset…"}</h3><p>The provider returned a model asset for authorized review.</p>{assetUrl && <a className="button button-secondary" href={assetUrl} target="_blank" rel="noreferrer">Open model asset <Icon name="external" size={15} /></a>}</div>;
 }
 
