@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { findModelMeasurement, modelHeightCm, modelMeasurementCm, normalizeModelMeasurementKey } from "../src/lib/measurementMapping";
+import { ellipseCircumferenceFromRadii, ellipseRadiiForCircumference, findModelMeasurement, modelHeightCm, modelMeasurementCm, normalizeModelMeasurementKey } from "../src/lib/measurementMapping";
+import { parseHeightInches } from "../src/lib/scanFlow";
 import type { Measurement } from "../src/lib/types";
 
 function measurement(key: string, value: number, unit: "cm" | "in" = "cm", adjusted_value: number | null = null): Measurement {
@@ -36,6 +37,30 @@ describe("measurement mapping for the 3D model", () => {
 
   it("prefers a tailor adjustment and converts inches to centimetres", () => {
     expect(modelMeasurementCm([measurement("waist", 32, "in", 31)], ["waist"], 82)).toBeCloseTo(78.74);
+  });
+
+  it("keeps dimensions and sides from being mixed during model calibration", () => {
+    expect(modelMeasurementCm([measurement("chest_width", 40)], ["chest"], 100.1, { dimension: "circumference" })).toBe(100.1);
+    expect(modelMeasurementCm([measurement("foot_length", 26.2)], ["foot_length"], 0, { dimension: "circumference" })).toBe(0);
+    expect(modelMeasurementCm([measurement("upper_arm", 33.3)], ["arm"], 57.3, { dimension: "length" })).toBe(57.3);
+    const left = measurement("bicep_left_circumference", 31.4);
+    const right = measurement("bicep_right_circumference", 33.3);
+    expect(modelMeasurementCm([left, right], ["bicep"], 30, { dimension: "circumference", side: "left" })).toBe(31.4);
+    expect(modelMeasurementCm([left, right], ["bicep"], 30, { dimension: "circumference", side: "right" })).toBe(33.3);
+  });
+
+  it("round-trips ellipse radii to the requested circumference", () => {
+    const modelUnitsPerCm = 4.3 / 170;
+    const radii = ellipseRadiiForCircumference(100.1, 0.72, modelUnitsPerCm);
+    expect(ellipseCircumferenceFromRadii(radii[0], radii[1], modelUnitsPerCm)).toBeCloseTo(100.1, 4);
+  });
+
+  it("strictly parses feet and inches without truncating malformed input", () => {
+    expect(parseHeightInches("5'7\"")).toBe(67);
+    expect(parseHeightInches("5 ft 7 in")).toBe(67);
+    expect(parseHeightInches("5'7.5")).toBeNull();
+    expect(parseHeightInches("5'7xyz")).toBeNull();
+    expect(parseHeightInches("5'7 99")).toBeNull();
   });
 
   it("uses safe fallbacks for missing or invalid values", () => {

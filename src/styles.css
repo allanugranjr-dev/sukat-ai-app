@@ -700,8 +700,10 @@ button:disabled { transform: none !important; }
 .model-3d-controls button:disabled { cursor: wait; opacity: .55; }
 .model-3d-hint { align-items: center; background: #f4f6fb; color: #7b879b; display: flex; font-size: 9px; gap: 5px; margin: 0; padding: 8px 15px 14px; }
 .model-3d-hint svg { color: #159796; }
+.model-provider-link { margin-top: 12px; width: max-content; }
+.model-provider-loading { color: var(--muted); display: block; font-size: 11px; margin-top: 11px; }
 @keyframes model-spin { to { transform: rotate(360deg); } }
-@media (max-width: 600px) { .model-3d-stage, .model-3d-stage canvas { min-height: 360px; height: 360px; }.model-3d-reference { bottom: 12px; right: 12px; }.model-3d-reference img { height: 69px; width: 42px; }.model-3d-scale { bottom: 12px; left: 11px; max-width: 155px; padding: 8px 9px; }.model-3d-scale span { font-size: 10px; }.model-3d-controls { padding-left: 11px; padding-right: 11px; }.model-3d-controls button { font-size: 8px; padding: 0 8px; }.model-3d-hint { padding-left: 11px; padding-right: 11px; } }
+@media (max-width: 600px) { .model-3d-stage, .model-3d-stage canvas { min-height: 400px; height: 400px; }.model-3d-reference { bottom: 12px; right: 12px; }.model-3d-reference img { height: 69px; width: 42px; }.model-3d-scale { bottom: 12px; left: 11px; max-width: 155px; padding: 8px 9px; }.model-3d-scale span { font-size: 10px; }.model-3d-focus-status { bottom: auto; left: 50%; max-width: calc(100% - 24px); top: 51px; }.model-3d-controls { padding-left: 11px; padding-right: 11px; }.model-3d-controls button { font-size: 8px; padding: 0 8px; }.model-3d-hint { padding-left: 11px; padding-right: 11px; } }
 
 @media (max-width: 700px) {
   .marketing-header { padding: 18px; }
@@ -1014,7 +1016,7 @@ body { background: var(--workspace); }
 .scan-progress-step.complete > i { background: #2b8b86; }
 
 .model-3d-viewer { background: #0b1b2a; border-color: #203b4f; }
-.model-3d-stage { background: #06111f; }
+.model-3d-stage { background: radial-gradient(circle at 50% 24%, rgba(42,111,144,.34), transparent 38%), linear-gradient(180deg, #07111f 0%, #09182a 72%, #06101c 100%); }
 .model-3d-scale { background: rgba(5, 17, 30, .84); border-color: rgba(93, 207, 207, .3); color: #d8f0ee; }
 .model-3d-scale span { color: #f0f8f8; }
 .model-3d-scale small { color: #9fb8c3; }

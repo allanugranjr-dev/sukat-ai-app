@@ -8,17 +8,24 @@ export const scanSteps: Array<{ key: ScanStep; label: string }> = [
   { key: "results", label: "Results" },
 ];
 
+/** Parse the supported feet/inches entry formats into total inches. */
+export function parseHeightInches(value: string): number | null {
+  const match = value.trim().match(/^(\d)\s*(?:(?:ft|feet)\s*|'\s*|\s+)(\d{1,2})?\s*(?:(?:in|inches)|")?\s*$/i);
+  if (!match) return null;
+  const feet = Number(match[1]);
+  const inches = Number(match[2] ?? 0);
+  if (!Number.isInteger(feet) || !Number.isInteger(inches) || inches > 11) return null;
+  return feet * 12 + inches;
+}
+
 export function isHeightValid(value: string, unit: "cm" | "ftin", unknownHeight: boolean): boolean {
   if (unknownHeight) return true;
   if (unit === "cm") {
     const number = Number(value);
     return Number.isFinite(number) && number >= 120 && number <= 230;
   }
-  const match = value.trim().match(/^(\d)\s*(?:ft|')?\s*(\d{1,2})?/i);
-  if (!match) return false;
-  const feet = Number(match[1]);
-  const inches = Number(match[2] ?? 0);
-  return feet >= 4 && feet <= 7 && inches >= 0 && inches <= 11;
+  const totalInches = parseHeightInches(value);
+  return totalInches !== null && totalInches >= 48 && totalInches <= 95;
 }
 
 export function previousScanPosition(step: ScanStep, captureIndex: number): {
