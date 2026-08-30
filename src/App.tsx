@@ -399,7 +399,8 @@ function ConfiguredApp() {
   const invitationParams = new URLSearchParams(window.location.search);
   const inviteToken = invitationParams.get("invite") ?? invitationParams.get("token");
   const authHash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const [supabaseInviteCallback] = useState(() => authHash.get("type") === "invite");
+  const [expiredInvitationCallback] = useState(() => authHash.get("error_code") === "otp_expired" && authHash.get("error") === "access_denied");
+  const [supabaseInviteCallback] = useState(() => authHash.get("type") === "invite" || expiredInvitationCallback);
   const accountInvitationId = profile?.role === "dressmaker"
     ? ""
     : typeof session?.user.app_metadata?.sukat_ai_invitation_id === "string"
@@ -407,7 +408,7 @@ function ConfiguredApp() {
       : typeof session?.user.user_metadata?.invitation_id === "string"
         ? session.user.user_metadata.invitation_id
         : "";
-  const invitationFlowRequested = !invitationFlowComplete && Boolean(inviteToken || supabaseInviteCallback || accountInvitationId);
+  const invitationFlowRequested = !invitationFlowComplete && Boolean(inviteToken || supabaseInviteCallback || accountInvitationId || expiredInvitationCallback);
   const verificationRequested = new URLSearchParams(window.location.search).get("verify") === "1" || authHash.get("type") === "signup";
   const verificationError = authHash.get("error_description") ?? authHash.get("error_code") ?? authHash.get("error") ?? "";
   const resetRequested = new URLSearchParams(window.location.search).get("reset") === "1" || window.location.hash.includes("type=recovery");
@@ -473,7 +474,7 @@ function ConfiguredApp() {
   if (resetRequested && session) return <PasswordResetPage onComplete={() => { clearSpecialUrl(); void signOut(); }} />;
   if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} verified={Boolean(session?.user.email_confirmed_at) && !verificationError} initialError={verificationError} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setPublicView("signin"); }} onContinue={() => { clearSpecialUrl(); setVerificationEmail(""); }} />;
   if (invitationFlowRequested && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
-  if (invitationFlowRequested && !session) return <InvitationWelcomePage session={null} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
+  if (invitationFlowRequested && !session) return <InvitationWelcomePage session={null} expired={expiredInvitationCallback} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
   if (!session) return publicView === "landing" ? <LandingPage onAuth={(view) => { setNotice(""); setPublicView(view); }} /> : <AuthPage mode={publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("landing"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
   if (!profile || !isRole(profile.role)) return <ProfileUnavailable message={profileError || "Your authenticated account does not have a valid SukatAI profile."} onSignOut={() => void signOut()} />;
   return <Workspace profile={profile} onProfileChange={setProfile} onSignOut={() => void signOut()} />;
@@ -565,7 +566,7 @@ function EmailVerificationPage({ email, verified, initialError, onBack, onContin
   </div>;
 }
 
-function InvitationWelcomePage({ session, onBack, onContinue }: { session: Session | null; onBack: () => void; onContinue: () => void }) {
+function InvitationWelcomePage({ session, expired = false, onBack, onContinue }: { session: Session | null; expired?: boolean; onBack: () => void; onContinue: () => void }) {
   const signedIn = Boolean(session);
   return <div className="auth-page invitation-welcome-page">
     <section className="auth-story invitation-story">
@@ -574,12 +575,12 @@ function InvitationWelcomePage({ session, onBack, onContinue }: { session: Sessi
       <span className="story-footer">SukatAI · secure measurement workspace</span>
     </section>
     <section className="auth-form-panel"><div className="auth-form-wrap invitation-card">
-      <div className="invitation-card-top"><Badge tone="warning" dot>Invitation only</Badge><span><Icon name="clock" size={14} /> Expires in 7 days</span></div>
+      <div className="invitation-card-top"><Badge tone={expired ? "danger" : "warning"} dot>{expired ? "Link expired" : "Invitation only"}</Badge><span><Icon name="clock" size={14} /> {expired ? "Fresh link required" : "Expires in 7 days"}</span></div>
       <div className="verification-icon invite-welcome-icon" aria-hidden="true"><Icon name="mail" size={26} /></div>
-      <div className="auth-heading"><p className="eyebrow">SECURE INVITATION</p><h2>You’ve been invited.</h2><p>{signedIn ? <>This invitation is addressed to <strong>{session?.user.email}</strong>. Continue to review it and activate your dressmaker account.</> : "Sign in with the email address that received this invitation to continue."}</p></div>
+      <div className="auth-heading"><p className="eyebrow">{expired ? "INVITATION LINK EXPIRED" : "SECURE INVITATION"}</p><h2>You’ve been invited.</h2><p>{expired ? "This secure email link has expired. Ask the administrator to send a new invitation, then open the fresh email." : signedIn ? <>This invitation is addressed to <strong>{session?.user.email}</strong>. Continue to review it and activate your dressmaker account.</> : "Sign in with the email address that received this invitation to continue."}</p></div>
       <div className="invite-welcome-details"><div><Icon name="shield" size={17} /><span><strong>Verified when accepted</strong><small>The server checks the one-time invitation before granting access.</small></span></div><div><Icon name="users" size={17} /><span><strong>Workroom access</strong><small>See only the customers and records assigned to your organization.</small></span></div></div>
       <div className="invitation-assurance"><Icon name="lock" size={15} /><span>Your invitation is private and can only be used once.</span></div>
-      {signedIn ? <Button type="button" onClick={onContinue} icon="arrow-right">Review and activate account</Button> : <Button type="button" onClick={onContinue} icon="arrow-right">Continue to sign in</Button>}
+      {signedIn ? <Button type="button" onClick={onContinue} icon="arrow-right">Review and activate account</Button> : <Button type="button" onClick={onContinue} icon="arrow-right">{expired ? "Try signing in" : "Continue to sign in"}</Button>}
       <button type="button" className="text-button invitation-back-link" onClick={onBack}>{signedIn ? "Use a different account" : "Return to home"}</button>
     </div></section>
   </div>;
