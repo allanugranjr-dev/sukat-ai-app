@@ -64,13 +64,26 @@ Deno.serve(async (request) => {
     }).select("id").single();
     if (invitationError || !invitation) return jsonResponse({ error: invitationError?.message ?? "The invitation could not be created." }, 400);
 
-    const { error: authError } = await client.auth.admin.inviteUserByEmail(email, {
+    const { data: invitedUser, error: authError } = await client.auth.admin.inviteUserByEmail(email, {
       data: { invitation_id: invitation.id },
       redirectTo: inviteUrl,
     });
-    if (authError) {
+    if (authError || !invitedUser.user) {
       await client.from("dressmaker_invitations").delete().eq("id", invitation.id);
-      return jsonResponse({ error: authError.message }, 400);
+      return jsonResponse({ error: authError?.message ?? "Supabase did not create the invited account." }, 400);
+    }
+
+    // Keep a server-owned copy as a fallback for callbacks whose email template
+    // drops the custom query string. app_metadata cannot be edited by the user.
+    const { error: metadataError } = await client.auth.admin.updateUserById(invitedUser.user.id, {
+      app_metadata: {
+        ...(invitedUser.user.app_metadata ?? {}),
+        sukat_ai_invitation_id: invitation.id,
+      },
+    });
+    if (metadataError) {
+      await client.from("dressmaker_invitations").delete().eq("id", invitation.id);
+      return jsonResponse({ error: metadataError.message }, 400);
     }
     return new Response(JSON.stringify({ invitation_id: invitation.id, invite_url: inviteUrl }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

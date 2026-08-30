@@ -395,14 +395,19 @@ function ConfiguredApp() {
   const [notice, setNotice] = useState("");
   const [verificationEmail, setVerificationEmail] = useState("");
   const [invitationAuthOpen, setInvitationAuthOpen] = useState(false);
+  const [invitationFlowComplete, setInvitationFlowComplete] = useState(false);
   const invitationParams = new URLSearchParams(window.location.search);
   const inviteToken = invitationParams.get("invite") ?? invitationParams.get("token");
   const authHash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const supabaseInviteCallback = authHash.get("type") === "invite";
-  const accountInvitationId = typeof session?.user.user_metadata?.invitation_id === "string"
-    ? session.user.user_metadata.invitation_id
-    : "";
-  const invitationFlowRequested = Boolean(inviteToken || supabaseInviteCallback || accountInvitationId);
+  const [supabaseInviteCallback] = useState(() => authHash.get("type") === "invite");
+  const accountInvitationId = profile?.role === "dressmaker"
+    ? ""
+    : typeof session?.user.app_metadata?.sukat_ai_invitation_id === "string"
+      ? session.user.app_metadata.sukat_ai_invitation_id
+      : typeof session?.user.user_metadata?.invitation_id === "string"
+        ? session.user.user_metadata.invitation_id
+        : "";
+  const invitationFlowRequested = !invitationFlowComplete && Boolean(inviteToken || supabaseInviteCallback || accountInvitationId);
   const verificationRequested = new URLSearchParams(window.location.search).get("verify") === "1" || authHash.get("type") === "signup";
   const verificationError = authHash.get("error_description") ?? authHash.get("error_code") ?? authHash.get("error") ?? "";
   const resetRequested = new URLSearchParams(window.location.search).get("reset") === "1" || window.location.hash.includes("type=recovery");
@@ -458,13 +463,17 @@ function ConfiguredApp() {
     next.searchParams.delete("verify");
     window.history.replaceState({}, "", `${next.pathname}${next.search}`);
   };
+  const finishInvitationFlow = () => {
+    setInvitationFlowComplete(true);
+    clearSpecialUrl();
+  };
 
   if (loading) return <FullPageLoading />;
-  if (invitationFlowRequested && session) return <InvitationAcceptPage token={inviteToken} session={session} profile={profile} onBack={() => { clearSpecialUrl(); setPublicView("signin"); }} onAccepted={async () => { await refreshProfile(); clearSpecialUrl(); }} />;
+  if (invitationFlowRequested && session) return <InvitationAcceptPage token={inviteToken} session={session} profile={profile} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onAccepted={async () => { await refreshProfile(); finishInvitationFlow(); }} />;
   if (resetRequested && session) return <PasswordResetPage onComplete={() => { clearSpecialUrl(); void signOut(); }} />;
   if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} verified={Boolean(session?.user.email_confirmed_at) && !verificationError} initialError={verificationError} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setPublicView("signin"); }} onContinue={() => { clearSpecialUrl(); setVerificationEmail(""); }} />;
   if (invitationFlowRequested && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
-  if (invitationFlowRequested && !session) return <InvitationWelcomePage session={null} onBack={() => { clearSpecialUrl(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
+  if (invitationFlowRequested && !session) return <InvitationWelcomePage session={null} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
   if (!session) return publicView === "landing" ? <LandingPage onAuth={(view) => { setNotice(""); setPublicView(view); }} /> : <AuthPage mode={publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("landing"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
   if (!profile || !isRole(profile.role)) return <ProfileUnavailable message={profileError || "Your authenticated account does not have a valid SukatAI profile."} onSignOut={() => void signOut()} />;
   return <Workspace profile={profile} onProfileChange={setProfile} onSignOut={() => void signOut()} />;
