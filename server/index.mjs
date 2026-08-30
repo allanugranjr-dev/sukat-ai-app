@@ -45,6 +45,9 @@ const allowedScanStatuses = [
 const allowedOrderStatuses = ["new", "accepted", "in_production", "for_fitting", "ready_for_pickup", "completed", "cancelled"];
 const allowedFittingStatuses = ["requested", "confirmed", "completed", "reschedule_requested", "cancelled"];
 const allowedReviewEvents = ["opened", "adjusted", "approved", "recapture_requested", "photo_accessed", "deleted"];
+const customerScanStatuses = ["draft", "uploaded", "processing_queued", "ready_for_review", "needs_recapture"];
+const staffScanStatuses = ["verified", "needs_recapture"];
+const getActions = new Set(["health", "session", "profile", "notifications", "organizations", "invitations", "admin_scans", "admin_orders", "asset"]);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -578,6 +581,21 @@ function requestOrigin(req) {
   return `${protocol}://${req.headers.host ?? `127.0.0.1:${config.port}`}`;
 }
 
+function invitationRedirectUrl(req, value) {
+  let redirect;
+  try {
+    redirect = new URL(value || `${requestOrigin(req)}/`, requestOrigin(req));
+  } catch {
+    throw new ApiError("The invitation redirect URL is invalid.", 400);
+  }
+  const configuredOrigin = config.notifications.publicAppUrl ? new URL(config.notifications.publicAppUrl).origin : null;
+  const allowed = new Set([requestOrigin(req), configuredOrigin, ...config.allowedOrigins].filter(Boolean));
+  if (!['http:', 'https:'].includes(redirect.protocol) || !allowed.has(redirect.origin)) {
+    throw new ApiError("The invitation redirect URL is not an allowed application origin.", 400);
+  }
+  return redirect;
+}
+
 function apiUrl(req, action, parameters = {}) {
   const url = new URL("/api", requestOrigin(req));
   url.searchParams.set("action", action);
@@ -692,23 +710,27 @@ async function processScanJob(scanId) {
     const assets = await rows("SELECT * FROM scan_assets WHERE scan_id = ?", [scanId]);
     const types = new Set(assets.map((asset) => asset.asset_type));
     if (["front", "side", "back"].some((required) => !types.has(required))) {
-      await execute(
-        "UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?",
+      const result = await execute(
+        "UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_for_review', 'verified')",
         ["failed", "Front, side, and back views are required.", scanId],
       );
-      await emitScanUpdate(scanId, "failed", "Front, side, and back views are required.");
+      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", "Front, side, and back views are required.");
       return;
     }
 
-    await execute(
-      "UPDATE scans SET status = ?, processing_provider = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'processing_queued', 'failed', 'draft')",
+    const claim = await execute(
+      "UPDATE scans SET status = ?, processing_provider = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'processing_queued', 'failed', 'draft', 'processing')",
       ["processing", "local", scanId],
     );
+    if (claim.affectedRows === 0) {
+      const current = await findScan(scanId);
+      if (!current || current.status !== "processing") return;
+    }
     await emitScanUpdate(scanId, "processing", "Processing has started. Your uploaded views are being checked.");
     await new Promise((resolve) => setTimeout(resolve, config.processingDelayMs));
 
     const current = await findScan(scanId);
-    if (!current || current.status === "verified") return;
+    if (!current || current.status !== "processing") return;
     const height = current.height_value === null ? 170 : Number(current.height_value) * (current.height_unit === "ftin" ? 2.54 : 1);
     const scale = Math.min(1.14, Math.max(0.86, height / 170));
     const penalty = current.height_value === null ? 10 : 0;
@@ -731,20 +753,21 @@ async function processScanJob(scanId) {
         "INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)",
         [randomUUID(), scanId, "local", "local-reference-3d-body-scan", jsonParameter(previewData), "ready"],
       );
-      await connection.query(
-        "UPDATE scans SET status = ?, processing_provider = ?, processing_version = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ?",
+      const finalUpdate = await connection.query(
+        "UPDATE scans SET status = ?, processing_provider = ?, processing_version = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
         ["ready_for_review", "local", "node-mariadb-demo-v1", scanId],
       );
+      if (finalUpdate.affectedRows === 0) throw new ApiError("The scan changed while it was being processed.", 409);
     });
     await emitScanUpdate(scanId, "ready_for_review", "Your local scan result is ready for tailor review.");
   } catch (error) {
     console.error(`Scan processing failed for ${scanId}:`, error);
     try {
-      await execute(
-        "UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?",
+      const result = await execute(
+        "UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
         ["failed", "The local processing service could not complete this scan.", scanId],
       );
-      await emitScanUpdate(scanId, "failed", "The local processing service could not complete this scan.");
+      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", "The local processing service could not complete this scan.");
     } catch (updateError) {
       console.error("Could not persist scan processing failure:", updateError);
     }
@@ -765,6 +788,7 @@ function isDuplicateError(error) {
 
 async function handleAction(req, res) {
   const action = stringInput(req.query ?? {}, "action", "") ?? "";
+  if (req.method !== "POST" && !getActions.has(action)) throw new ApiError("Use POST for this action.", 405);
   const data = requestData(req);
 
   switch (action) {
@@ -903,13 +927,7 @@ async function handleAction(req, res) {
       const invitationId = randomUUID();
       await execute("INSERT INTO dressmaker_invitations (id, organization_id, email, invited_role, token_hash, expires_at, invited_by) VALUES (?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 7 DAY), ?)", [invitationId, organizationId, email, "dressmaker", hashToken(token), user.id]);
       const redirect = stringInput(data, "redirect_to", "") ?? "";
-      const base = redirect || `${requestOrigin(req)}/`;
-      let inviteUrl;
-      try {
-        inviteUrl = new URL(base);
-      } catch {
-        throw new ApiError("The invitation redirect URL is invalid.", 400);
-      }
+      const inviteUrl = invitationRedirectUrl(req, redirect);
       inviteUrl.searchParams.set("invite", token);
       const delivery = await dispatchInvitationEmail({ invitationId, invitedBy: user.id, email, organizationName: organization.name, inviteUrl: inviteUrl.toString() });
       return sendData(res, { invitation_id: invitationId, invite_url: inviteUrl.toString(), email_status: delivery.status, email_provider: delivery.provider, email_error: delivery.error });
@@ -920,11 +938,18 @@ async function handleAction(req, res) {
       const token = stringInput(data, "token", "") ?? "";
       const firstName = stringInput(data, "first_name", user.first_name) ?? user.first_name;
       const lastName = stringInput(data, "last_name", user.last_name) ?? user.last_name;
-      const invitation = await row("SELECT * FROM dressmaker_invitations WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP() LIMIT 1", [hashToken(token)]);
-      if (!invitation) throw new ApiError("This invitation is invalid, expired, or already accepted.", 400);
+      if (!token || !firstName || !lastName) throw new ApiError("Invitation token and name are required.", 400);
       await transaction(async (connection) => {
+        const invitations = await connection.query("SELECT * FROM dressmaker_invitations WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP() LIMIT 1 FOR UPDATE", [hashToken(token)]);
+        const invitation = invitations[0] ?? null;
+        if (!invitation) throw new ApiError("This invitation is invalid, expired, or already accepted.", 400);
+        if (String(user.email).toLowerCase() !== String(invitation.email).toLowerCase()) throw new ApiError("Sign in with the email address that received this invitation.", 403);
+        if (user.role !== "customer" && !(user.role === "dressmaker" && user.organization_id === invitation.organization_id)) {
+          throw new ApiError("This account cannot accept a dressmaker invitation.", 403);
+        }
         await connection.query("UPDATE users SET role = ?, organization_id = ?, first_name = ?, last_name = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", ["dressmaker", invitation.organization_id, firstName.slice(0, 80), lastName.slice(0, 80), user.id]);
-        await connection.query("UPDATE dressmaker_invitations SET accepted_at = UTC_TIMESTAMP() WHERE id = ? AND accepted_at IS NULL", [invitation.id]);
+        const accepted = await connection.query("UPDATE dressmaker_invitations SET accepted_at = UTC_TIMESTAMP() WHERE id = ? AND accepted_at IS NULL", [invitation.id]);
+        if (accepted.affectedRows !== 1) throw new ApiError("This invitation is invalid, expired, or already accepted.", 400);
       });
       return sendData(res, { accepted: true });
     }
@@ -943,6 +968,13 @@ async function handleAction(req, res) {
     case "update_scan": {
       const user = await requireUser(req);
       const scan = await requireScan(stringInput(data, "scan_id", "") ?? "", user);
+      const isCustomer = scan.customer_id === user.id;
+      if (!isCustomer) requireOrganizationStaff(user, scan.organization_id);
+      const suppliedFields = Object.keys(data).filter((field) => field !== "scan_id");
+      const allowedFields = isCustomer ? ["height_value", "height_unit", "status", "capture_source", "failure_reason"] : ["status"];
+      if (suppliedFields.some((field) => !allowedFields.includes(field))) {
+        throw new ApiError(isCustomer ? "The scan update contains unsupported fields." : "Dressmakers can only update the review status of a scan.", 403);
+      }
       const fields = [];
       const values = [];
       if (Object.prototype.hasOwnProperty.call(data, "height_value")) {
@@ -958,6 +990,9 @@ async function handleAction(req, res) {
         if (!Object.prototype.hasOwnProperty.call(data, field)) continue;
         const value = stringInput(data, field);
         if (field === "status" && !allowedScanStatuses.includes(value)) throw new ApiError("The scan status is invalid.", 400);
+        if (field === "status" && value !== scan.status && !(isCustomer ? customerScanStatuses : staffScanStatuses).includes(value)) {
+          throw new ApiError(isCustomer ? "Customers cannot set a staff or provider status." : "Dressmakers can only verify or request recapture for a scan.", 403);
+        }
         if (field === "capture_source" && !['camera', 'upload'].includes(value)) throw new ApiError("The capture source is invalid.", 400);
         fields.push(`${field} = ?`); values.push(value);
       }
@@ -1080,8 +1115,8 @@ async function handleAction(req, res) {
       const status = stringInput(data, "status", "") ?? "";
       if (!allowedOrderStatuses.includes(status)) throw new ApiError("The order status is invalid.", 400);
       if (order.customer_id === user.id && status !== order.status) throw new ApiError("Only your dressmaker can update the production status.", 403);
-      await execute("UPDATE orders SET status = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", [status, orderId]);
-      if (status === "ready_for_pickup" && order.status !== status) await dispatchOrderReadyNotifications(orderId);
+      const update = await execute("UPDATE orders SET status = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = ?", [status, orderId, order.status]);
+      if (update.affectedRows > 0 && status === "ready_for_pickup" && order.status !== status) await dispatchOrderReadyNotifications(orderId);
       return sendData(res, orderResponse(await row("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])));
     }
 
@@ -1090,7 +1125,7 @@ async function handleAction(req, res) {
       const orderId = stringInput(data, "order_id", "") ?? "";
       const order = await row("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId]);
       if (!order) throw new ApiError("Order not found.", 404);
-      if (order.customer_id !== user.id) requireOrganizationStaff(user, order.organization_id);
+      requireOrganizationStaff(user, order.organization_id);
       const startsAt = mysqlDateTime(stringInput(data, "starts_at"));
       if (!startsAt) throw new ApiError("A fitting date is required.", 400);
       const id = randomUUID();
@@ -1103,7 +1138,7 @@ async function handleAction(req, res) {
       const fittingId = stringInput(data, "fitting_id", "") ?? "";
       const fitting = await row("SELECT f.*, o.customer_id, o.organization_id FROM fittings f JOIN orders o ON o.id = f.order_id WHERE f.id = ? LIMIT 1", [fittingId]);
       if (!fitting) throw new ApiError("Fitting not found.", 404);
-      if (fitting.customer_id !== user.id) requireOrganizationStaff(user, fitting.organization_id);
+      requireOrganizationStaff(user, fitting.organization_id);
       const status = stringInput(data, "status", "") ?? "";
       if (!allowedFittingStatuses.includes(status)) throw new ApiError("The fitting status is invalid.", 400);
       await execute("UPDATE fittings SET status = ? WHERE id = ?", [status, fittingId]);
@@ -1191,8 +1226,12 @@ async function handleAction(req, res) {
       const assets = await rows("SELECT * FROM scan_assets WHERE scan_id = ?", [scan.id]);
       const types = new Set(assets.map((asset) => asset.asset_type));
       if (["front", "side", "back"].some((required) => !types.has(required))) {
-        await execute("UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?", ["failed", "Front, side, and back views are required.", scan.id]);
-        await emitScanUpdate(scan.id, "failed", "Front, side, and back views are required.");
+        const result = await execute("UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_for_review', 'verified')", ["failed", "Front, side, and back views are required.", scan.id]);
+        if (result.affectedRows > 0) await emitScanUpdate(scan.id, "failed", "Front, side, and back views are required.");
+        if (result.affectedRows === 0) {
+          const current = await findScan(scan.id);
+          if (current?.status === "ready_for_review" || current?.status === "verified") return sendData(res, { status: "ready_for_review", message: "Your scan result is already ready for review." });
+        }
         return sendData(res, { status: "failed", message: "Front, side, and back views are required." });
       }
       if (scan.status === "ready_for_review" || scan.status === "verified") return sendData(res, { status: "ready_for_review", message: "Your scan result is already ready for review." });
@@ -1211,6 +1250,7 @@ function allowedOrigin(origin) {
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  if (origin && !allowedOrigin(origin)) return sendError(res, new ApiError("The request origin is not allowed.", 403));
   if (allowedOrigin(origin)) {
     if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");

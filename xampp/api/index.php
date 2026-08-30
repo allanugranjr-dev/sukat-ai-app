@@ -20,6 +20,16 @@ if ($origin !== '' && preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
     header('Access-Control-Allow-Origin: ' . $origin);
     header('Access-Control-Allow-Credentials: true');
 }
+if ($origin !== '') {
+    $requestOrigin = ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $localOrigin = (bool) preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i', $origin);
+    if (strcasecmp($origin, $requestOrigin) !== 0 && !$localOrigin) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['ok' => false, 'message' => 'The request origin is not allowed.'], JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+}
 header('Access-Control-Allow-Headers: Content-Type, X-Requested-With');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Cache-Control: no-store');
@@ -178,7 +188,7 @@ function publicUser(array $user): array
 
 function sessionPayload(array $user): array
 {
-    $token = 'xampp-' . session_id();
+    $token = 'xampp-session';
     return [
         'access_token' => $token,
         'token_type' => 'bearer',
@@ -345,6 +355,28 @@ function notificationResponse(array $row): array
     ];
 }
 
+function ensureOrderReadyNotification(array $order): void
+{
+    $eventKey = 'order-ready:' . $order['id'];
+    $statement = database()->prepare('SELECT id FROM notifications WHERE event_key = ? LIMIT 1');
+    $statement->execute([$eventKey]);
+    if ($statement->fetch()) return;
+    try {
+        $statement = database()->prepare('INSERT INTO notifications (id, user_id, type, title, body, metadata, event_key) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        $statement->execute([
+            uuid(),
+            $order['customer_id'],
+            'order_ready',
+            'Your order is ready',
+            substr((string) $order['garment_type'] . ' is ready for pickup. Please contact your dressmaker for collection details.', 0, 1000),
+            json_encode(['order_id' => $order['id'], 'status' => $order['status']], JSON_UNESCAPED_SLASHES),
+            $eventKey,
+        ]);
+    } catch (PDOException $error) {
+        if ((string) $error->getCode() !== '23000') throw $error;
+    }
+}
+
 function isAdmin(array $user): bool
 {
     return $user['role'] === 'admin';
@@ -462,7 +494,40 @@ function localMeasurementTemplate(): array
     ];
 }
 
+function invitationRedirectUrl(?string $value): string
+{
+    $base = $value ?: requestOrigin() . '/';
+    $parts = parse_url($base);
+    if (!$parts || empty($parts['scheme']) || empty($parts['host']) || !in_array(strtolower($parts['scheme']), ['http', 'https'], true)) {
+        throw new SukatApiException('The invitation redirect URL is invalid.', 400);
+    }
+    $origin = strtolower($parts['scheme']) . '://' . strtolower($parts['host']) . (isset($parts['port']) ? ':' . $parts['port'] : '');
+    $requestOriginValue = strtolower(requestOrigin());
+    $localOrigin = (bool) preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i', $origin);
+    if ($origin !== $requestOriginValue && !$localOrigin) throw new SukatApiException('The invitation redirect URL is not an allowed application origin.', 400);
+    return $base;
+}
+
+function failProcessingScan(?string $scanId): void
+{
+    if (!$scanId) return;
+    try {
+        $statement = database()->prepare("UPDATE scans SET status = 'failed', failure_reason = ?, updated_at = NOW() WHERE id = ? AND status = 'processing'");
+        $statement->execute(['The local processing service could not complete this scan.', $scanId]);
+    } catch (Throwable $error) {
+        error_log('SukatAI could not persist scan processing failure: ' . $error->getMessage());
+    }
+}
+
 $action = stringInput($_GET, 'action', '') ?? '';
+$getActions = ['health', 'session', 'profile', 'notifications', 'organizations', 'invitations', 'admin_scans', 'admin_orders', 'asset'];
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST' && !in_array($action, $getActions, true)) {
+    http_response_code(405);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['ok' => false, 'message' => 'Use POST for this action.'], JSON_UNESCAPED_SLASHES);
+    exit;
+}
+$processingScanId = null;
 
 try {
     switch ($action) {
@@ -636,10 +701,12 @@ try {
             $statement = database()->prepare('INSERT INTO dressmaker_invitations (id, organization_id, email, invited_role, token_hash, expires_at, invited_by) VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY), ?)');
             $statement->execute([$id, $organizationId, $email, 'dressmaker', hash('sha256', $token), $user['id']]);
             $redirect = stringInput($data, 'redirect_to', '') ?? '';
-            if (str_contains($redirect, 'invite=')) {
-                $inviteUrl = preg_replace('/invite=[^&]*/', 'invite=' . rawurlencode($token), $redirect) ?: apiUrl('accept_dressmaker_invitation');
+            $inviteUrl = invitationRedirectUrl($redirect);
+            if (preg_match('/([?&])invite=[^&]*/', $inviteUrl)) {
+                $inviteUrl = preg_replace('/([?&])invite=[^&]*/', '$1invite=' . rawurlencode($token), $inviteUrl, 1) ?: $inviteUrl;
             } else {
-                $inviteUrl = ($redirect !== '' ? $redirect : publicAssetUrl('')) . (str_contains($redirect, '?') ? '&' : '?') . 'invite=' . rawurlencode($token);
+                $separator = str_contains($inviteUrl, '?') ? '&' : '?';
+                $inviteUrl .= $separator . 'invite=' . rawurlencode($token);
             }
             jsonResponse(['invitation_id' => $id, 'invite_url' => $inviteUrl]);
         }
@@ -650,17 +717,23 @@ try {
             $token = stringInput($data, 'token', '') ?? '';
             $firstName = stringInput($data, 'first_name', $user['first_name']) ?? $user['first_name'];
             $lastName = stringInput($data, 'last_name', $user['last_name']) ?? $user['last_name'];
-            $statement = database()->prepare('SELECT * FROM dressmaker_invitations WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW() LIMIT 1');
-            $statement->execute([hash('sha256', $token)]);
-            $invitation = $statement->fetch();
-            if (!$invitation) throw new SukatApiException('This invitation is invalid, expired, or already accepted.', 400);
+            if ($token === '' || $firstName === '' || $lastName === '') throw new SukatApiException('Invitation token and name are required.', 400);
             $db = database();
             $db->beginTransaction();
             try {
+                $statement = $db->prepare('SELECT * FROM dressmaker_invitations WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW() LIMIT 1 FOR UPDATE');
+                $statement->execute([hash('sha256', $token)]);
+                $invitation = $statement->fetch() ?: null;
+                if (!$invitation) throw new SukatApiException('This invitation is invalid, expired, or already accepted.', 400);
+                if (strtolower((string) $user['email']) !== strtolower((string) $invitation['email'])) throw new SukatApiException('Sign in with the email address that received this invitation.', 403);
+                if ($user['role'] !== 'customer' && !($user['role'] === 'dressmaker' && $user['organization_id'] === $invitation['organization_id'])) {
+                    throw new SukatApiException('This account cannot accept a dressmaker invitation.', 403);
+                }
                 $statement = $db->prepare('UPDATE users SET role = ?, organization_id = ?, first_name = ?, last_name = ?, updated_at = NOW() WHERE id = ?');
                 $statement->execute(['dressmaker', $invitation['organization_id'], substr($firstName, 0, 80), substr($lastName, 0, 80), $user['id']]);
                 $statement = $db->prepare('UPDATE dressmaker_invitations SET accepted_at = NOW() WHERE id = ? AND accepted_at IS NULL');
                 $statement->execute([$invitation['id']]);
+                if ($statement->rowCount() !== 1) throw new SukatApiException('This invitation is invalid, expired, or already accepted.', 400);
                 $db->commit();
             } catch (Throwable $error) {
                 $db->rollBack();
@@ -687,6 +760,13 @@ try {
             $data = requestData();
             $scanId = stringInput($data, 'scan_id', '') ?? '';
             $scan = requireScan($scanId, $user);
+            $isCustomer = $scan['customer_id'] === $user['id'];
+            if (!$isCustomer) requireOrganizationStaff($user, $scan['organization_id']);
+            $suppliedFields = array_values(array_diff(array_keys($data), ['scan_id']));
+            $allowedFields = $isCustomer ? ['height_value', 'height_unit', 'status', 'capture_source', 'failure_reason'] : ['status'];
+            foreach ($suppliedFields as $field) {
+                if (!in_array($field, $allowedFields, true)) throw new SukatApiException($isCustomer ? 'The scan update contains unsupported fields.' : 'Dressmakers can only update the review status of a scan.', 403);
+            }
             $fields = [];
             $values = [];
             if (array_key_exists('height_value', $data)) {
@@ -697,6 +777,10 @@ try {
                 if (array_key_exists($field, $data)) {
                     $value = stringInput($data, $field);
                     if ($field === 'status' && !in_array($value, ['draft', 'uploaded', 'processing_queued', 'processing', 'ready_for_review', 'verified', 'needs_recapture', 'failed'], true)) throw new SukatApiException('The scan status is invalid.', 400);
+                    if ($field === 'status' && $value !== $scan['status']) {
+                        $allowedStatuses = $isCustomer ? ['draft', 'uploaded', 'processing_queued', 'ready_for_review', 'needs_recapture'] : ['verified', 'needs_recapture'];
+                        if (!in_array($value, $allowedStatuses, true)) throw new SukatApiException($isCustomer ? 'Customers cannot set a staff or provider status.' : 'Dressmakers can only verify or request recapture for a scan.', 403);
+                    }
                     $fields[] = $field . ' = ?';
                     $values[] = $value;
                 }
@@ -864,8 +948,14 @@ try {
             if ($order['customer_id'] !== $user['id']) requireOrganizationStaff($user, $order['organization_id']);
             $status = stringInput($data, 'status', '') ?? '';
             if (!in_array($status, ['new', 'accepted', 'in_production', 'for_fitting', 'ready_for_pickup', 'completed', 'cancelled'], true)) throw new SukatApiException('The order status is invalid.', 400);
-            $statement = database()->prepare('UPDATE orders SET status = ?, updated_at = NOW() WHERE id = ?');
-            $statement->execute([$status, $orderId]);
+            if ($order['customer_id'] === $user['id'] && $status !== $order['status']) throw new SukatApiException('Only your dressmaker can update the production status.', 403);
+            $statement = database()->prepare('UPDATE orders SET status = ?, updated_at = NOW() WHERE id = ? AND status = ?');
+            $statement->execute([$status, $orderId, $order['status']]);
+            if ($statement->rowCount() > 0 && $status === 'ready_for_pickup' && $order['status'] !== $status) {
+                $updatedOrder = $order;
+                $updatedOrder['status'] = $status;
+                ensureOrderReadyNotification($updatedOrder);
+            }
             $statement = database()->prepare('SELECT * FROM orders WHERE id = ? LIMIT 1');
             $statement->execute([$orderId]);
             jsonResponse(orderResponse($statement->fetch()));
@@ -879,7 +969,7 @@ try {
             $statement->execute([$orderId]);
             $order = $statement->fetch();
             if (!$order) throw new SukatApiException('Order not found.', 404);
-            if ($order['customer_id'] !== $user['id']) requireOrganizationStaff($user, $order['organization_id']);
+            requireOrganizationStaff($user, $order['organization_id']);
             $startsAt = mysqlDateTime(stringInput($data, 'starts_at'));
             if ($startsAt === null) throw new SukatApiException('A fitting date is required.', 400);
             $id = uuid();
@@ -898,7 +988,7 @@ try {
             $statement->execute([$fittingId]);
             $fitting = $statement->fetch();
             if (!$fitting) throw new SukatApiException('Fitting not found.', 404);
-            if ($fitting['customer_id'] !== $user['id']) requireOrganizationStaff($user, $fitting['organization_id']);
+            requireOrganizationStaff($user, $fitting['organization_id']);
             $status = stringInput($data, 'status', '') ?? '';
             if (!in_array($status, ['requested', 'confirmed', 'completed', 'reschedule_requested', 'cancelled'], true)) throw new SukatApiException('The fitting status is invalid.', 400);
             $statement = database()->prepare('UPDATE fittings SET status = ? WHERE id = ?');
@@ -1036,39 +1126,60 @@ try {
             $user = requireUser();
             $data = requestData();
             $scan = requireScan(stringInput($data, 'scan_id', '') ?? '', $user);
+            $processingScanId = $scan['id'];
             $statement = database()->prepare('SELECT * FROM scan_assets WHERE scan_id = ?');
             $statement->execute([$scan['id']]);
             $assets = $statement->fetchAll();
             $types = array_column($assets, 'asset_type');
             foreach (['front', 'side', 'back'] as $required) {
                 if (!in_array($required, $types, true)) {
-                    $statement = database()->prepare('UPDATE scans SET status = ?, failure_reason = ?, updated_at = NOW() WHERE id = ?');
+                    $statement = database()->prepare("UPDATE scans SET status = ?, failure_reason = ?, updated_at = NOW() WHERE id = ? AND status NOT IN ('ready_for_review', 'verified')");
                     $statement->execute(['failed', 'Front, side, and back views are required.', $scan['id']]);
+                    $current = $statement->rowCount() === 0 ? findScan($scan['id']) : null;
+                    if ($current && in_array($current['status'], ['ready_for_review', 'verified'], true)) {
+                        jsonResponse(['status' => 'ready_for_review', 'message' => 'Your scan result is already ready for review.']);
+                    }
                     jsonResponse(['status' => 'failed', 'message' => 'Front, side, and back views are required.']);
                 }
             }
-            $statement = database()->prepare('UPDATE scans SET status = ?, processing_provider = ?, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND status IN (\'uploaded\', \'processing_queued\', \'failed\', \'draft\')');
+            $statement = database()->prepare("UPDATE scans SET status = ?, processing_provider = ?, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND (status IN ('uploaded', 'processing_queued', 'failed', 'draft') OR (status = 'processing' AND updated_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)))");
             $statement->execute(['processing', 'local', $scan['id']]);
+            if ($statement->rowCount() === 0) {
+                $current = findScan($scan['id']);
+                if (!$current || $current['status'] !== 'processing') {
+                    jsonResponse(['status' => $current['status'] ?? $scan['status'], 'message' => 'This scan is already being processed or is not ready to process.']);
+                }
+            }
             $height = $scan['height_value'] === null ? 170.0 : (float) $scan['height_value'];
             if ($scan['height_unit'] === 'ftin') $height *= 2.54;
             $scale = min(1.14, max(0.86, $height / 170.0));
             $hasHeight = $scan['height_value'] !== null && is_numeric($scan['height_value']);
             $penalty = $hasHeight ? 0 : 10;
-            $statement = database()->prepare('INSERT INTO measurements (id, scan_id, `key`, value, unit, confidence, ai_value) VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), confidence = VALUES(confidence), ai_value = VALUES(ai_value), updated_at = NOW()');
-            foreach (localMeasurementTemplate() as $measurement) {
-                $value = round((float) $measurement['value'] * $scale, 1);
-                $confidence = max(45, (float) $measurement['confidence'] - $penalty);
-                $statement->execute([uuid(), $scan['id'], $measurement['key'], $value, 'cm', $confidence, $value]);
+            $db = database();
+            $db->beginTransaction();
+            try {
+                $statement = $db->prepare('INSERT INTO measurements (id, scan_id, `key`, value, unit, confidence, ai_value) VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), confidence = VALUES(confidence), ai_value = VALUES(ai_value), updated_at = NOW()');
+                foreach (localMeasurementTemplate() as $measurement) {
+                    $value = round((float) $measurement['value'] * $scale, 1);
+                    $confidence = max(45, (float) $measurement['confidence'] - $penalty);
+                    $statement->execute([uuid(), $scan['id'], $measurement['key'], $value, 'cm', $confidence, $value]);
+                }
+                $previewData = json_encode([
+                    'kind' => 'local-reference-3d-body-scan',
+                    'reference_image' => '/media/3d-body-scan-reference-v2.png',
+                    'source' => 'local reference image; not a personalized scan',
+                ], JSON_UNESCAPED_SLASHES);
+                $statement = $db->prepare('INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)');
+                $statement->execute([uuid(), $scan['id'], 'local', 'local-reference-3d-body-scan', $previewData, 'ready']);
+                $statement = $db->prepare("UPDATE scans SET status = ?, processing_provider = ?, processing_version = ?, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND status = 'processing'");
+                $statement->execute(['ready_for_review', 'local', 'xampp-local-demo-v1', $scan['id']]);
+                if ($statement->rowCount() !== 1) throw new SukatApiException('The scan changed while it was being processed.', 409);
+                $db->commit();
+            } catch (Throwable $error) {
+                if ($db->inTransaction()) $db->rollBack();
+                throw $error;
             }
-            $previewData = json_encode([
-                'kind' => 'local-reference-3d-body-scan',
-                'reference_image' => '/media/3d-body-scan-reference-v2.png',
-                'source' => 'local reference image; not a personalized scan',
-            ], JSON_UNESCAPED_SLASHES);
-            $statement = database()->prepare('INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)');
-            $statement->execute([uuid(), $scan['id'], 'local', 'local-reference-3d-body-scan', $previewData, 'ready']);
-            $statement = database()->prepare('UPDATE scans SET status = ?, processing_provider = ?, processing_version = ?, failure_reason = NULL, updated_at = NOW() WHERE id = ?');
-            $statement->execute(['ready_for_review', 'local', 'xampp-local-demo-v1', $scan['id']]);
+            $processingScanId = null;
             jsonResponse(['status' => 'ready_for_review', 'message' => 'XAMPP local demo result is ready for tailor review.']);
         }
 
@@ -1076,11 +1187,14 @@ try {
             throw new SukatApiException('Unknown XAMPP API action.', 404);
     }
 } catch (SukatApiException $error) {
+    failProcessingScan($processingScanId);
     jsonError($error->getMessage(), $error->status);
 } catch (PDOException $error) {
+    failProcessingScan($processingScanId);
     error_log('SukatAI MySQL error: ' . $error->getMessage());
     jsonError('The XAMPP database is unavailable. Import xampp/database/sukatai.sql and start MySQL in XAMPP.', 500);
 } catch (Throwable $error) {
+    failProcessingScan($processingScanId);
     error_log('SukatAI API error: ' . $error->getMessage());
     jsonError('The XAMPP API could not complete the request.', 500);
 }

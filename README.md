@@ -64,7 +64,10 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 supabase secrets set RECONSTRUCTION_PROVIDER=YOUR_PROVIDER_NAME
 supabase secrets set RECONSTRUCTION_API_URL=https://provider.example/v1/reconstruct
 supabase secrets set RECONSTRUCTION_API_KEY=YOUR_PROVIDER_KEY
+supabase secrets set INVITATION_ALLOWED_ORIGINS=https://your-frontend.example.com
 ```
+
+`INVITATION_ALLOWED_ORIGINS` is required by the invitation function and accepts a comma-separated list of exact frontend origins. Keep it server-side; it prevents invitation links from redirecting to an untrusted site.
 
 The migration creates:
 

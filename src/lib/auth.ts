@@ -95,7 +95,7 @@ export async function updatePassword(password: string): Promise<User> {
 
 export async function signOut(): Promise<void> {
   if (isLocalApiMode) {
-    await xamppRequest("sign_out");
+    await xamppRequest("sign_out", { body: {} });
     notifyXamppAuthStateChange("SIGNED_OUT", null);
     return;
   }
@@ -143,7 +143,10 @@ export async function markNotificationRead(notificationId: string): Promise<void
     await xamppRequest("mark_notification_read", { body: { notification_id: notificationId } });
     return;
   }
-  const { error } = await requireSupabase().from("notifications").update({ read_at: new Date().toISOString() }).eq("id", notificationId);
+  const client = requireSupabase();
+  const { data: userData, error: userError } = await client.auth.getUser();
+  if (userError || !userData.user) throw new Error(readableError(userError ?? new Error("Authentication is required.")));
+  const { error } = await client.from("notifications").update({ read_at: new Date().toISOString() }).eq("id", notificationId).eq("user_id", userData.user.id);
   if (error) throw new Error(readableError(error));
 }
 

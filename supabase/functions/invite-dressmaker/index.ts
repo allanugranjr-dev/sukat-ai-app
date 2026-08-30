@@ -1,15 +1,33 @@
 import { adminClient, AuthRequiredError, randomToken, requireUser, sha256 } from "../_shared/auth.ts";
 import { corsHeaders, jsonResponse, optionsResponse } from "../_shared/cors.ts";
 
+function allowedInvitationOrigins(): string[] {
+  const configured = Deno.env.get("INVITATION_ALLOWED_ORIGINS")?.trim() || Deno.env.get("SUPABASE_SITE_URL")?.trim() || "";
+  return configured.split(",").map((value) => {
+    try {
+      const url = new URL(value.trim());
+      return ["http:", "https:"].includes(url.protocol) ? url.origin : "";
+    } catch {
+      return "";
+    }
+  }).filter(Boolean);
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return optionsResponse();
+  if (request.method !== "POST") return jsonResponse({ error: "Use POST to create an invitation." }, 405);
   try {
     const client = adminClient();
     const user = await requireUser(request, client);
     const { data: actor, error: actorError } = await client.from("profiles").select("role").eq("id", user.id).single();
     if (actorError || actor?.role !== "admin") return jsonResponse({ error: "Administrator access is required." }, 403);
 
-    const body = await request.json() as { email?: string; organizationId?: string; redirectTo?: string };
+    let body: { email?: string; organizationId?: string; redirectTo?: string };
+    try {
+      body = await request.json() as { email?: string; organizationId?: string; redirectTo?: string };
+    } catch {
+      return jsonResponse({ error: "Request body must be valid JSON." }, 400);
+    }
     const email = body.email?.trim().toLowerCase() ?? "";
     const organizationId = body.organizationId?.trim() ?? "";
     if (!email || !organizationId || !body.redirectTo) return jsonResponse({ error: "Email, organization, and redirect URL are required." }, 400);
@@ -25,6 +43,9 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: "The invitation redirect URL is invalid." }, 400);
     }
     if (!['http:', 'https:'].includes(redirectUrl.protocol)) return jsonResponse({ error: "The invitation redirect URL is invalid." }, 400);
+    const allowedOrigins = allowedInvitationOrigins();
+    if (allowedOrigins.length === 0) return jsonResponse({ error: "Invitation redirect origins are not configured on the server." }, 500);
+    if (!allowedOrigins.includes(redirectUrl.origin)) return jsonResponse({ error: "The invitation redirect URL is not an allowed application origin." }, 400);
     const rawToken = randomToken();
     const tokenParameter = redirectUrl.searchParams.has("token") ? "token" : "invite";
     redirectUrl.searchParams.set(tokenParameter, rawToken);

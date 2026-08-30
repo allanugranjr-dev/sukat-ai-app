@@ -62,11 +62,12 @@ function localProviderResult(scan: ScanForLocalProvider): { measurements: Provid
 }
 
 function validMeasurement(value: ProviderMeasurement): value is { key: string; value: number; unit: "cm" | "in"; confidence: number | null } {
-  return typeof value.key === "string" && value.key.trim().length > 0 && typeof value.value === "number" && Number.isFinite(value.value) && value.value > 0 && (value.unit === "cm" || value.unit === "in") && (value.confidence === undefined || value.confidence === null || (typeof value.confidence === "number" && value.confidence >= 0 && value.confidence <= 100));
+  return typeof value.key === "string" && value.key.trim().length > 0 && value.key.trim().length <= 80 && typeof value.value === "number" && Number.isFinite(value.value) && value.value > 0 && (value.unit === "cm" || value.unit === "in") && (value.confidence === undefined || value.confidence === null || (typeof value.confidence === "number" && value.confidence >= 0 && value.confidence <= 100));
 }
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return optionsResponse();
+  if (request.method !== "POST") return jsonResponse({ error: "Use POST for scan processing." }, 405);
   const client = adminClient();
   let scanId = "";
   try {
@@ -90,7 +91,7 @@ Deno.serve(async (request) => {
     if (assetsError) return jsonResponse({ error: assetsError.message }, 400);
     const required = ["front", "side", "back"];
     if (!required.every((type) => (assets ?? []).some((asset) => asset.asset_type === type))) {
-      await client.from("scans").update({ status: "failed", failure_reason: "Front, side, and back views are required." }).eq("id", scanId);
+      await client.from("scans").update({ status: "failed", failure_reason: "Front, side, and back views are required." }).eq("id", scanId).not("status", "in", "(ready_for_review,verified)");
       return jsonResponse({ status: "failed", message: "Front, side, and back views are required." }, 400);
     }
 
@@ -108,12 +109,27 @@ Deno.serve(async (request) => {
       await client.from("scans").update({ status: "failed", processing_provider: null, failure_reason: message }).eq("id", scanId);
       return jsonResponse({ status: "failed", message }, 503);
     }
+    if (!localMode) {
+      try {
+        if (new URL(providerUrl!).protocol !== "https:") throw new Error();
+      } catch {
+        const message = "The reconstruction provider URL must use HTTPS.";
+        await client.from("scans").update({ status: "failed", processing_provider: null, failure_reason: message }).eq("id", scanId).not("status", "in", "(ready_for_review,verified)");
+        return jsonResponse({ status: "failed", message }, 503);
+      }
+    }
 
+    const staleProcessing = scan.status === "processing"
+      && Number.isFinite(new Date(scan.updated_at).getTime())
+      && new Date(scan.updated_at).getTime() < Date.now() - 10 * 60 * 1000;
+    const claimStatuses = staleProcessing
+      ? ["uploaded", "processing_queued", "failed", "draft", "processing"]
+      : ["uploaded", "processing_queued", "failed", "draft"];
     const { data: claimedScan, error: claimError } = await client
       .from("scans")
       .update({ status: "processing", processing_provider: provider, failure_reason: null })
       .eq("id", scanId)
-      .in("status", ["uploaded", "processing_queued", "failed"])
+      .in("status", claimStatuses)
       .select("id")
       .maybeSingle();
     if (claimError) throw claimError;
@@ -147,9 +163,11 @@ Deno.serve(async (request) => {
         clearTimeout(timeout);
       }
       if (!providerResponse.ok) throw new Error(`Provider returned HTTP ${providerResponse.status}.`);
-      result = await providerResponse.json() as { measurements?: ProviderMeasurement[]; body_model?: ProviderModel; processing_version?: string };
+       const decoded = await providerResponse.json() as unknown;
+       if (!isRecord(decoded)) throw new Error("Provider response was not a JSON object.");
+       result = decoded as { measurements?: ProviderMeasurement[]; body_model?: ProviderModel; processing_version?: string };
     }
-    const measurements = result.measurements ?? [];
+    const measurements = Array.isArray(result.measurements) ? result.measurements : [];
     if (measurements.length === 0 || !measurements.every(validMeasurement)) throw new Error("Provider response did not contain a valid measurement set.");
     const normalizedMeasurements = measurements.map((measurement) => ({ scan_id: scanId, key: measurement.key.trim(), value: measurement.value, ai_value: measurement.value, unit: measurement.unit, confidence: measurement.confidence ?? null }));
     if (new Set(normalizedMeasurements.map((measurement) => measurement.key.toLowerCase())).size !== normalizedMeasurements.length) throw new Error("Provider response contained duplicate measurement keys.");
@@ -165,11 +183,19 @@ Deno.serve(async (request) => {
       const { error: modelError } = await client.from("body_models").upsert({ scan_id: scanId, provider, model_url_or_path: modelPath, preview_data: previewData, status: "ready" }, { onConflict: "scan_id" });
       if (modelError) throw modelError;
     }
-    await client.from("scans").update({ status: "ready_for_review", processing_provider: provider, processing_version: result.processing_version ?? null, failure_reason: null }).eq("id", scanId);
+    const { data: completedScan, error: completionError } = await client
+      .from("scans")
+      .update({ status: "ready_for_review", processing_provider: provider, processing_version: result.processing_version ?? null, failure_reason: null })
+      .eq("id", scanId)
+      .eq("status", "processing")
+      .select("id")
+      .maybeSingle();
+    if (completionError) throw completionError;
+    if (!completedScan) throw new Error("The scan changed while it was being processed.");
     return jsonResponse({ status: "ready_for_review", message: localMode ? "Local demo result is ready for tailor review." : "A validated provider result is ready for tailor review." });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The reconstruction provider failed.";
-    if (scanId) await client.from("scans").update({ status: "failed", failure_reason: message }).eq("id", scanId);
+    if (scanId) await client.from("scans").update({ status: "failed", failure_reason: message }).eq("id", scanId).eq("status", "processing");
     return jsonResponse({ status: "failed", message }, error instanceof AuthRequiredError ? 401 : 500);
   }
 });
