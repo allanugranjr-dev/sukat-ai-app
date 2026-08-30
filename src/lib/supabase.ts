@@ -50,6 +50,18 @@ export function publicAppOrigin(): string {
   return window.location.origin;
 }
 
+export function invitationAppOrigin(): string {
+  const configured = (import.meta.env.VITE_PUBLIC_APP_URL ?? "").trim();
+  if (configured) {
+    try {
+      return new URL(configured, window.location.origin).origin;
+    } catch {
+      // Fall back to the production alias when a deployment variable is malformed.
+    }
+  }
+  return "https://sukat-ai-app.vercel.app";
+}
+
 export const supabase: SupabaseClient | null = !isLocalApiMode && supabaseConfig.isConfigured
   ? createClient(supabaseConfig.url, supabaseConfig.anonKey, {
       auth: {

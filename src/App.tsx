@@ -60,7 +60,7 @@ import { ellipseRadiiForCircumference, modelHeightCm, modelMeasurementCm, normal
 import { requestScanProcessing, processingCopy } from "./lib/reconstructionProvider";
 import { createSignedStorageUrl, deleteScanAsset, uploadScanAsset } from "./lib/storage";
 import { subscribeToNodeScan } from "./lib/nodeApi";
-import { publicAppOrigin, readableError, supabaseConfig } from "./lib/supabase";
+import { invitationAppOrigin, publicAppOrigin, readableError, supabaseConfig } from "./lib/supabase";
 import {
   displayName,
   fittingStatusLabel,
@@ -2200,7 +2200,7 @@ function AdminInvitations({ profile }: { profile: Profile }) {
     event.preventDefault(); setError(""); setNotice(""); setInviteUrl("");
     if (!email.trim() || !organizationId) { setError("Enter an email and choose an organization."); return; }
     setBusy(true);
-    try { const result = await inviteDressmaker({ email, organizationId, redirectTo: `${publicAppOrigin()}/?invite=` }); setNotice(result.emailStatus === "sent" ? "Invitation created and sent by email." : "Invitation created. Email delivery is not configured yet, so share the secure link below."); setInviteUrl(result.inviteUrl ?? ""); setEmail(""); invitationsState.reload(); } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
+    try { const result = await inviteDressmaker({ email, organizationId, redirectTo: `${invitationAppOrigin()}/?invite=` }); setNotice(result.emailStatus === "sent" ? "Invitation created and sent by email." : "Invitation created. Email delivery is not configured yet, so share the secure link below."); setInviteUrl(result.inviteUrl ?? ""); setEmail(""); invitationsState.reload(); } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
   };
   const organizationName = (id: string) => organizations.find((organization) => organization.id === id)?.name ?? id.slice(0, 8);
   const invitationState = (invitation: Invitation) => invitation.accepted_at ? "Accepted" : invitation.revoked_at ? "Revoked" : new Date(invitation.expires_at) < new Date() ? "Expired" : "Pending";
