@@ -3,6 +3,7 @@
   "buildCommand": "npm run build:supabase",
   "outputDirectory": "dist",
   "env": {
-    "VITE_BACKEND_MODE": "supabase"
+    "VITE_BACKEND_MODE": "supabase",
+    "VITE_PUBLIC_APP_URL": "https://sukat-ai-app.vercel.app"
   }
 }

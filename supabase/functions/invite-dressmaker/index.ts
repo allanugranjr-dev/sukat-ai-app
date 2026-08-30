@@ -3,14 +3,14 @@ import { corsHeaders, jsonResponse, optionsResponse } from "../_shared/cors.ts";
 
 function allowedInvitationOrigins(): string[] {
   const configured = Deno.env.get("INVITATION_ALLOWED_ORIGINS")?.trim() || Deno.env.get("SUPABASE_SITE_URL")?.trim() || "";
-  return configured.split(",").map((value) => {
+  return [...configured.split(","), "https://sukat-ai-app.vercel.app"].map((value) => {
     try {
       const url = new URL(value.trim());
       return ["http:", "https:"].includes(url.protocol) ? url.origin : "";
     } catch {
       return "";
     }
-  }).filter(Boolean);
+  }).filter(Boolean).filter((origin, index, origins) => origins.indexOf(origin) === index);
 }
 
 Deno.serve(async (request) => {

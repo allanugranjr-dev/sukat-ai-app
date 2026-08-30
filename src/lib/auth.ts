@@ -1,5 +1,5 @@
 import type { AuthResponse, Session, User } from "@supabase/supabase-js";
-import { isLocalApiMode, requireSupabase, readableError } from "./supabase";
+import { isLocalApiMode, publicAppOrigin, requireSupabase, readableError } from "./supabase";
 import { notifyXamppAuthStateChange, subscribeToXamppAuthState, xamppRequest } from "./xampp";
 import type { Invitation, Notification, Organization, Profile, Role } from "./types";
 
@@ -65,7 +65,7 @@ export async function signUpCustomer(input: {
     email: input.email.trim(),
     password: input.password,
     options: {
-      emailRedirectTo: `${window.location.origin}/?verify=1`,
+      emailRedirectTo: `${publicAppOrigin()}/?verify=1`,
       data: {
         first_name: input.firstName.trim(),
         last_name: input.lastName.trim(),
@@ -84,7 +84,7 @@ export async function resendSignupConfirmation(email: string): Promise<void> {
     type: "signup",
     email: email.trim(),
     options: {
-      emailRedirectTo: `${window.location.origin}/?verify=1`,
+      emailRedirectTo: `${publicAppOrigin()}/?verify=1`,
     },
   });
   if (error) throw new Error(readableError(error));
@@ -96,7 +96,7 @@ export async function sendPasswordReset(email: string): Promise<void> {
     return;
   }
   const { error } = await requireSupabase().auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: `${window.location.origin}/?reset=1`,
+    redirectTo: `${publicAppOrigin()}/?reset=1`,
   });
   if (error) throw new Error(readableError(error));
 }

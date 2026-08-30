@@ -35,6 +35,18 @@ export const supabaseConfig = {
   },
 };
 
+export function publicAppOrigin(): string {
+  const configured = (import.meta.env.VITE_PUBLIC_APP_URL ?? "").trim();
+  if (configured) {
+    try {
+      return new URL(configured, window.location.origin).origin;
+    } catch {
+      // Fall back to the current origin when a deployment variable is malformed.
+    }
+  }
+  return window.location.origin;
+}
+
 export const supabase: SupabaseClient | null = !isLocalApiMode && supabaseConfig.isConfigured
   ? createClient(supabaseConfig.url, supabaseConfig.anonKey, {
       auth: {
