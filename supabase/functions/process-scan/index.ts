@@ -63,13 +63,6 @@ function localProviderResult(scan: ScanForLocalProvider): { measurements: Provid
   };
 }
 
-function isLocalRuntime(request: Request): boolean {
-  const requestHost = new URL(request.url).hostname.toLowerCase();
-  const runtimeUrl = Deno.env.get("SUPABASE_URL")?.toLowerCase() ?? "";
-  return ["localhost", "127.0.0.1", "::1", "kong", "edge-runtime"].includes(requestHost)
-    || /(^|[/:])(?:localhost|127\.0\.0\.1|kong|edge-runtime)(?:[:/]|$)/.test(runtimeUrl);
-}
-
 function validMeasurement(value: ProviderMeasurement): value is { key: string; value: number; unit: "cm" | "in"; confidence: number | null } {
   return typeof value.key === "string" && value.key.trim().length > 0 && typeof value.value === "number" && Number.isFinite(value.value) && value.value > 0 && (value.unit === "cm" || value.unit === "in") && (value.confidence === undefined || value.confidence === null || (typeof value.confidence === "number" && value.confidence >= 0 && value.confidence <= 100));
 }
@@ -106,8 +99,11 @@ Deno.serve(async (request) => {
     const configuredProvider = Deno.env.get("RECONSTRUCTION_PROVIDER")?.trim();
     const providerUrl = Deno.env.get("RECONSTRUCTION_API_URL")?.trim();
     const providerKey = Deno.env.get("RECONSTRUCTION_API_KEY")?.trim();
+    // Keep the hosted demo usable before an external reconstruction provider is
+    // configured. The result is explicitly labeled local-demo-v1 in the UI and
+    // must be reviewed by a dressmaker; a configured provider overrides it.
     const localMode = configuredProvider?.toLowerCase() === "local"
-      || (!configuredProvider && !providerUrl && !providerKey && isLocalRuntime(request));
+      || (!configuredProvider && !providerUrl && !providerKey);
     const provider = localMode ? "local" : configuredProvider ?? "";
     if (!localMode && (!provider || !providerUrl || !providerKey)) {
       const message = "No reconstruction provider is configured. Configure one in the Edge Function secrets, then retry this scan.";
