@@ -1,11 +1,11 @@
 export type ScanStep = "prep" | "height" | "capture" | "processing" | "results";
 
 export const scanSteps: Array<{ key: ScanStep; label: string }> = [
-  { key: "prep", label: "Consent" },
+  { key: "prep", label: "Prepare" },
   { key: "height", label: "Height" },
-  { key: "capture", label: "Capture" },
-  { key: "processing", label: "Process" },
-  { key: "results", label: "Results" },
+  { key: "capture", label: "Photos" },
+  { key: "processing", label: "Processing" },
+  { key: "results", label: "Review" },
 ];
 
 /** Parse the supported feet/inches entry formats into total inches. */
