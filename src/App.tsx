@@ -1071,6 +1071,275 @@ function createBodyModelScene(three: ThreeModule, measurements: Measurement[], h
   return { root, guides };
 }
 
+type MeasuredBodyRing = { y: number; width: number; depth: number; x?: number; z?: number };
+
+function normalizeModelMeasurementKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function findModelMeasurement(measurements: Measurement[], aliases: string[]): Measurement | undefined {
+  const normalizedAliases = aliases.map(normalizeModelMeasurementKey);
+  return measurements.find((measurement) => {
+    const key = normalizeModelMeasurementKey(measurement.key);
+    const keyTokens = key.split("_");
+    return normalizedAliases.some((alias) => {
+      const aliasTokens = alias.split("_");
+      return key === alias
+        || key.startsWith(`${alias}_`)
+        || key.endsWith(`_${alias}`)
+        || aliasTokens.every((token) => keyTokens.includes(token));
+    });
+  });
+}
+
+function modelMeasurementCm(measurements: Measurement[], aliases: string[], fallback: number): number {
+  const measurement = findModelMeasurement(measurements, aliases);
+  const value = Number(measurement?.adjusted_value ?? measurement?.value);
+  if (!measurement || !Number.isFinite(value) || value <= 0) return fallback;
+  return measurement.unit === "in" ? value * 2.54 : value;
+}
+
+function modelHeightCm(heightValue: number | null | undefined, heightUnit: "cm" | "ftin"): number {
+  const value = Number(heightValue);
+  if (heightValue === null || heightValue === undefined || !Number.isFinite(value) || value <= 0) return 170;
+  return heightUnit === "ftin" ? value * 2.54 : value;
+}
+
+function ellipseRadiiForCircumference(circumferenceCm: number, depthRatio: number, modelUnitsPerCm: number): [number, number] {
+  const perimeterForUnitWidth = Math.PI * (3 * (1 + depthRatio) - Math.sqrt((3 + depthRatio) * (1 + 3 * depthRatio)));
+  const widthRadiusCm = circumferenceCm / perimeterForUnitWidth;
+  return [widthRadiusCm * modelUnitsPerCm, widthRadiusCm * depthRatio * modelUnitsPerCm];
+}
+
+function createMeasuredSurface(three: ThreeModule, group: THREE.Group, rings: MeasuredBodyRing[], material: THREE.Material) {
+  const segments = 40;
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const ringVertex = (ringIndex: number, segment: number) => ringIndex * segments + (segment % segments);
+  rings.forEach((ring) => {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = (segment / segments) * Math.PI * 2;
+      positions.push((ring.x ?? 0) + ring.width * Math.cos(angle), ring.y, (ring.z ?? 0) + ring.depth * Math.sin(angle));
+    }
+  });
+  for (let ringIndex = 0; ringIndex < rings.length - 1; ringIndex += 1) {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const current = ringVertex(ringIndex, segment);
+      const next = ringVertex(ringIndex, segment + 1);
+      const upper = ringVertex(ringIndex + 1, segment);
+      const upperNext = ringVertex(ringIndex + 1, segment + 1);
+      indices.push(current, upper, next, next, upper, upperNext);
+    }
+  }
+  const bottomCenter = positions.length / 3;
+  positions.push(rings[0].x ?? 0, rings[0].y, rings[0].z ?? 0);
+  const topCenter = positions.length / 3;
+  const topRing = rings[rings.length - 1];
+  positions.push(topRing.x ?? 0, topRing.y, topRing.z ?? 0);
+  for (let segment = 0; segment < segments; segment += 1) {
+    indices.push(bottomCenter, ringVertex(0, segment), ringVertex(0, segment + 1));
+    indices.push(topCenter, ringVertex(rings.length - 1, segment + 1), ringVertex(rings.length - 1, segment));
+  }
+  const geometry = new three.BufferGeometry();
+  geometry.setAttribute("position", new three.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const mesh = new three.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+  return mesh;
+}
+
+function addMeasuredLimb(three: ThreeModule, group: THREE.Group, start: THREE.Vector3, end: THREE.Vector3, startRadius: number, endRadius: number, material: THREE.Material) {
+  const direction = new three.Vector3().subVectors(end, start);
+  const length = direction.length();
+  if (!length) return null;
+  const mesh = new three.Mesh(new three.CylinderGeometry(endRadius, startRadius, length, 24, 1), material);
+  mesh.position.copy(start).add(end).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(new three.Vector3(0, 1, 0), direction.normalize());
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+  return mesh;
+}
+
+function addMeasuredGuideLine(three: ThreeModule, group: THREE.Group, points: THREE.Vector3[], color: number) {
+  const line = new three.Line(
+    new three.BufferGeometry().setFromPoints(points),
+    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.92, depthTest: false }),
+  );
+  line.renderOrder = 4;
+  line.frustumCulled = false;
+  group.add(line);
+}
+
+function addMeasuredEllipseGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, radii: [number, number], color: number) {
+  const points: THREE.Vector3[] = [];
+  for (let index = 0; index < 64; index += 1) {
+    const angle = (index / 64) * Math.PI * 2;
+    points.push(new three.Vector3(center.x + radii[0] * Math.cos(angle), center.y, center.z + radii[1] * Math.sin(angle)));
+  }
+  const line = new three.LineLoop(
+    new three.BufferGeometry().setFromPoints(points),
+    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false }),
+  );
+  line.renderOrder = 4;
+  line.frustumCulled = false;
+  group.add(line);
+}
+
+function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, start: THREE.Vector3, end: THREE.Vector3, radius: number, color: number) {
+  const axis = new three.Vector3().subVectors(end, start).normalize();
+  const reference = Math.abs(axis.y) < 0.9 ? new three.Vector3(0, 1, 0) : new three.Vector3(1, 0, 0);
+  const basisA = new three.Vector3().crossVectors(axis, reference).normalize();
+  const basisB = new three.Vector3().crossVectors(axis, basisA).normalize();
+  const points: THREE.Vector3[] = [];
+  for (let index = 0; index < 40; index += 1) {
+    const angle = (index / 40) * Math.PI * 2;
+    points.push(center.clone().addScaledVector(basisA, radius * Math.cos(angle)).addScaledVector(basisB, radius * Math.sin(angle)));
+  }
+  const line = new three.LineLoop(
+    new three.BufferGeometry().setFromPoints(points),
+    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false }),
+  );
+  line.renderOrder = 4;
+  line.frustumCulled = false;
+  group.add(line);
+}
+
+function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurement[], heightValue: number | null | undefined, heightUnit: "cm" | "ftin") {
+  const root = new three.Group();
+  const body = new three.Group();
+  const guides = new three.Group();
+  const bodyMaterial = new three.MeshStandardMaterial({ color: 0xc2d2e8, roughness: 0.44, metalness: 0.02, emissive: 0x162844, emissiveIntensity: 0.2 });
+  const jointMaterial = new three.MeshStandardMaterial({ color: 0xa8bddc, roughness: 0.52, metalness: 0.02, emissive: 0x10213b, emissiveIntensity: 0.15 });
+  const featureMaterial = new three.MeshStandardMaterial({ color: 0x17253a, roughness: 0.34, metalness: 0.02 });
+  const modelUnitsPerCm = 4.3 / 170;
+  const heightCm = clampNumber(modelHeightCm(heightValue, heightUnit), 120, 230);
+  const height = heightCm * modelUnitsPerCm;
+  const chestCm = modelMeasurementCm(measurements, ["chest", "bust"], 100.1);
+  const waistCm = modelMeasurementCm(measurements, ["waist"], 82.2);
+  const hipCm = modelMeasurementCm(measurements, ["hip", "hips"], 94.8);
+  const neckCm = modelMeasurementCm(measurements, ["neck"], 37.6);
+  const headCm = modelMeasurementCm(measurements, ["head", "head_circumference"], 59.7);
+  const shoulderCm = modelMeasurementCm(measurements, ["shoulder", "shoulders", "shoulder_breadth"], 52.5);
+  const bicepCm = modelMeasurementCm(measurements, ["bicep", "upper_arm"], 33.3);
+  const forearmCm = modelMeasurementCm(measurements, ["forearm"], 28.0);
+  const wristCm = modelMeasurementCm(measurements, ["wrist"], 17.5);
+  const thighCm = modelMeasurementCm(measurements, ["thigh"], 55.3);
+  const calfCm = modelMeasurementCm(measurements, ["calf"], 36.4);
+  const ankleCm = modelMeasurementCm(measurements, ["ankle"], 24.3);
+  const footLengthCm = modelMeasurementCm(measurements, ["foot_length", "right_foot_length"], 26.2);
+  const footWidthCm = modelMeasurementCm(measurements, ["foot_width", "right_foot_width"], 9.7);
+  const inseamCm = modelMeasurementCm(measurements, ["inseam", "inside_leg_height"], 72.4);
+  const armLengthCm = modelMeasurementCm(measurements, ["arm", "arm_length", "sleeve"], 57.3);
+  const chestRadii = ellipseRadiiForCircumference(chestCm, 0.72, modelUnitsPerCm);
+  const waistRadii = ellipseRadiiForCircumference(waistCm, 0.72, modelUnitsPerCm);
+  const hipRadii = ellipseRadiiForCircumference(hipCm, 0.76, modelUnitsPerCm);
+  const neckRadii = ellipseRadiiForCircumference(neckCm, 0.82, modelUnitsPerCm);
+  const headRadii = ellipseRadiiForCircumference(headCm, 0.88, modelUnitsPerCm);
+  const shoulderHalf = shoulderCm * modelUnitsPerCm / 2;
+  const shoulderY = height * 0.78;
+  const hipY = height * 0.52;
+  const crotchY = clampNumber(inseamCm * modelUnitsPerCm, height * 0.39, height * 0.51);
+  const kneeY = Math.max(crotchY * 0.58, height * 0.24);
+  const ankleY = height * 0.055;
+  const leftLegX = clampNumber(hipRadii[0] * 0.62, 0.16, 0.38);
+  const chestY = height * 0.69;
+  const waistY = height * 0.62;
+  const hipGuideY = height * 0.52;
+
+  root.add(body, guides);
+  createMeasuredSurface(three, body, [
+    { y: height * 0.47, width: hipRadii[0] * 0.84, depth: hipRadii[1] * 0.84 },
+    { y: hipY, width: hipRadii[0], depth: hipRadii[1] },
+    { y: height * 0.57, width: waistRadii[0] * 1.06, depth: waistRadii[1] * 1.04 },
+    { y: waistY, width: waistRadii[0], depth: waistRadii[1] },
+    { y: chestY, width: chestRadii[0], depth: chestRadii[1] },
+    { y: height * 0.74, width: chestRadii[0] * 0.98, depth: chestRadii[1] * 0.94 },
+    { y: shoulderY, width: Math.max(chestRadii[0] * 0.94, shoulderHalf * 0.83), depth: chestRadii[1] * 0.88 },
+  ], bodyMaterial);
+  createMeasuredSurface(three, body, [
+    { y: height * 0.78, width: neckRadii[0] * 1.06, depth: neckRadii[1] * 1.06 },
+    { y: height * 0.84, width: neckRadii[0], depth: neckRadii[1] },
+    { y: height * 0.87, width: neckRadii[0], depth: neckRadii[1] },
+  ], bodyMaterial);
+
+  const headY = height * 0.935;
+  addBodySphere(three, body, [0, headY, 0], [headRadii[0], height * 0.087, headRadii[1]], bodyMaterial);
+  addBodySphere(three, body, [-headRadii[0] * 1.02, headY, 0], [0.035, height * 0.035, 0.03], jointMaterial);
+  addBodySphere(three, body, [headRadii[0] * 1.02, headY, 0], [0.035, height * 0.035, 0.03], jointMaterial);
+  addBodySphere(three, body, [-headRadii[0] * 0.36, headY + height * 0.018, headRadii[1] * 0.95], [0.035, 0.025, 0.018], featureMaterial);
+  addBodySphere(three, body, [headRadii[0] * 0.36, headY + height * 0.018, headRadii[1] * 0.95], [0.035, 0.025, 0.018], featureMaterial);
+  addBodySphere(three, body, [0, headY - height * 0.012, headRadii[1] * 1.02], [0.026, 0.04, 0.038], jointMaterial);
+  addBodySphere(three, body, [0, headY - height * 0.055, headRadii[1] * 1.0], [0.065, 0.012, 0.012], featureMaterial);
+
+  const leftShoulder = new three.Vector3(-shoulderHalf, shoulderY, 0);
+  const rightShoulder = new three.Vector3(shoulderHalf, shoulderY, 0);
+  const armTotal = armLengthCm * modelUnitsPerCm;
+  const armUpper = clampNumber(armTotal * 0.48, height * 0.12, height * 0.22);
+  const leftElbow = new three.Vector3(-shoulderHalf * 1.13, shoulderY - armUpper, 0.03);
+  const rightElbow = new three.Vector3(shoulderHalf * 1.13, shoulderY - armUpper, 0.03);
+  const leftWrist = new three.Vector3(-shoulderHalf * 1.16, shoulderY - armTotal, 0.04);
+  const rightWrist = new three.Vector3(shoulderHalf * 1.16, shoulderY - armTotal, 0.04);
+  const bicepRadius = bicepCm * modelUnitsPerCm / (2 * Math.PI);
+  const forearmRadius = forearmCm * modelUnitsPerCm / (2 * Math.PI);
+  const wristRadius = wristCm * modelUnitsPerCm / (2 * Math.PI);
+  addBodySphere(three, body, [-shoulderHalf * 0.93, shoulderY, 0], [height * 0.045, height * 0.05, height * 0.055], bodyMaterial);
+  addBodySphere(three, body, [shoulderHalf * 0.93, shoulderY, 0], [height * 0.045, height * 0.05, height * 0.055], bodyMaterial);
+  addMeasuredLimb(three, body, leftShoulder, leftElbow, bicepRadius * 1.1, bicepRadius * 0.9, bodyMaterial);
+  addMeasuredLimb(three, body, rightShoulder, rightElbow, bicepRadius * 1.1, bicepRadius * 0.9, bodyMaterial);
+  addMeasuredLimb(three, body, leftElbow, leftWrist, forearmRadius * 1.1, forearmRadius * 0.9, bodyMaterial);
+  addMeasuredLimb(three, body, rightElbow, rightWrist, forearmRadius * 1.1, forearmRadius * 0.9, bodyMaterial);
+  addBodySphere(three, body, leftElbow.toArray() as [number, number, number], [height * 0.035, height * 0.035, height * 0.035], jointMaterial);
+  addBodySphere(three, body, rightElbow.toArray() as [number, number, number], [height * 0.035, height * 0.035, height * 0.035], jointMaterial);
+  addBodySphere(three, body, [leftWrist.x, leftWrist.y - height * 0.035, leftWrist.z], [height * 0.045, height * 0.07, height * 0.04], bodyMaterial);
+  addBodySphere(three, body, [rightWrist.x, rightWrist.y - height * 0.035, rightWrist.z], [height * 0.045, height * 0.07, height * 0.04], bodyMaterial);
+
+  const leftHip = new three.Vector3(-leftLegX, hipY, 0);
+  const rightHip = new three.Vector3(leftLegX, hipY, 0);
+  const leftKnee = new three.Vector3(-leftLegX * 1.04, kneeY, 0.015);
+  const rightKnee = new three.Vector3(leftLegX * 1.04, kneeY, 0.015);
+  const leftAnkle = new three.Vector3(-leftLegX * 1.06, ankleY, 0.02);
+  const rightAnkle = new three.Vector3(leftLegX * 1.06, ankleY, 0.02);
+  const thighRadius = thighCm * modelUnitsPerCm / (2 * Math.PI);
+  const calfRadius = calfCm * modelUnitsPerCm / (2 * Math.PI);
+  const ankleRadius = ankleCm * modelUnitsPerCm / (2 * Math.PI);
+  addMeasuredLimb(three, body, leftHip, leftKnee, thighRadius * 1.1, thighRadius * 0.9, bodyMaterial);
+  addMeasuredLimb(three, body, rightHip, rightKnee, thighRadius * 1.1, thighRadius * 0.9, bodyMaterial);
+  addMeasuredLimb(three, body, leftKnee, leftAnkle, calfRadius * 1.08, calfRadius * 0.92, bodyMaterial);
+  addMeasuredLimb(three, body, rightKnee, rightAnkle, calfRadius * 1.08, calfRadius * 0.92, bodyMaterial);
+  addBodySphere(three, body, leftKnee.toArray() as [number, number, number], [height * 0.04, height * 0.04, height * 0.04], jointMaterial);
+  addBodySphere(three, body, rightKnee.toArray() as [number, number, number], [height * 0.04, height * 0.04, height * 0.04], jointMaterial);
+  const footLengthRadius = footLengthCm * modelUnitsPerCm / 2;
+  const footWidthRadius = footWidthCm * modelUnitsPerCm / 2;
+  addBodySphere(three, body, [leftAnkle.x, height * 0.035, footLengthRadius * 0.52], [footWidthRadius, height * 0.035, footLengthRadius], bodyMaterial);
+  addBodySphere(three, body, [rightAnkle.x, height * 0.035, footLengthRadius * 0.52], [footWidthRadius, height * 0.035, footLengthRadius], bodyMaterial);
+
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, height * 0.84, 0), neckRadii, 0x9e9cff);
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, headY, 0), headRadii, 0x72e56f);
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, chestY, 0), chestRadii, 0x60e8d7);
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, waistY, 0), waistRadii, 0x71dbe6);
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, hipGuideY, 0), hipRadii, 0xf1d33b);
+  addMeasuredLimbGuide(three, guides, leftShoulder.clone().lerp(leftElbow, 0.5), leftShoulder, leftElbow, bicepRadius, 0x74d96e);
+  addMeasuredLimbGuide(three, guides, rightShoulder.clone().lerp(rightElbow, 0.5), rightShoulder, rightElbow, bicepRadius, 0x74d96e);
+  addMeasuredLimbGuide(three, guides, leftElbow.clone().lerp(leftWrist, 0.5), leftElbow, leftWrist, forearmRadius, 0xe969ad);
+  addMeasuredLimbGuide(three, guides, rightElbow.clone().lerp(rightWrist, 0.5), rightElbow, rightWrist, forearmRadius, 0xe969ad);
+  addMeasuredLimbGuide(three, guides, leftHip.clone().lerp(leftKnee, 0.46), leftHip, leftKnee, thighRadius, 0xc3d2e3);
+  addMeasuredLimbGuide(three, guides, rightHip.clone().lerp(rightKnee, 0.46), rightHip, rightKnee, thighRadius, 0xc3d2e3);
+  addMeasuredLimbGuide(three, guides, leftKnee.clone().lerp(leftAnkle, 0.5), leftKnee, leftAnkle, calfRadius, 0x5bd6e2);
+  addMeasuredLimbGuide(three, guides, rightKnee.clone().lerp(rightAnkle, 0.5), rightKnee, rightAnkle, calfRadius, 0x5bd6e2);
+  const guideDepth = Math.max(chestRadii[1], hipRadii[1]) + 0.18;
+  addMeasuredGuideLine(three, guides, [new three.Vector3(-shoulderHalf, shoulderY, guideDepth), new three.Vector3(shoulderHalf, shoulderY, guideDepth)], 0x64e4d3);
+  const heightGuideX = Math.max(shoulderHalf, chestRadii[0]) + 0.42;
+  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX, 0.02, guideDepth), new three.Vector3(heightGuideX, height, guideDepth)], 0xf04fc5);
+  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX - 0.08, 0.02, guideDepth), new three.Vector3(heightGuideX + 0.08, 0.02, guideDepth)], 0xf04fc5);
+  addMeasuredGuideLine(three, guides, [new three.Vector3(heightGuideX - 0.08, height, guideDepth), new three.Vector3(heightGuideX + 0.08, height, guideDepth)], 0xf04fc5);
+  addMeasuredGuideLine(three, guides, [new three.Vector3(-leftLegX * 0.2, crotchY, guideDepth), new three.Vector3(-leftLegX * 0.2, ankleY, guideDepth)], 0xea4fc0);
+  return { root, guides };
+}
+
 function disposeThreeScene(scene: THREE.Scene) {
   scene.traverse((object) => {
     const renderable = object as unknown as { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] };
@@ -1091,7 +1360,7 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
   const [showGuides, setShowGuides] = useState(true);
   const [reducedMotion, setReducedMotion] = useState(() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const instructionsId = useId();
-  const measurementSignature = measurements.map((measurement) => `${measurement.key}:${measurement.value}`).join("|");
+  const measurementSignature = measurements.map((measurement) => `${measurement.key}:${measurement.value}:${measurement.adjusted_value ?? ""}:${measurement.unit}`).join("|");
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -1164,7 +1433,7 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
         gridMaterial.transparent = true;
         gridMaterial.opacity = 0.52;
         scene.add(grid);
-        const bodyScene = createBodyModelScene(three, measurements, heightValue, heightUnit);
+        const bodyScene = createMeasuredBodyModelScene(three, measurements, heightValue, heightUnit);
         guidesRef.current = bodyScene.guides;
         bodyScene.guides.visible = showGuides;
         scene.add(bodyScene.root);
@@ -1260,8 +1529,9 @@ function InteractiveBodyModel({ generatedImage, measurements = [], heightValue =
   };
   const zoomIn = () => { controlsRef.current?.dollyIn(1.12); controlsRef.current?.update(); renderRequestRef.current?.(); };
   const zoomOut = () => { controlsRef.current?.dollyOut(1.12); controlsRef.current?.update(); renderRequestRef.current?.(); };
+  const modelHeightLabel = heightValue === null || heightValue === undefined ? "170 cm reference height" : `${modelHeightCm(heightValue, heightUnit).toFixed(1)} cm tall`;
 
-  return <div className="model-3d-viewer"><div className="model-3d-stage" aria-busy={viewerState === "loading"}><canvas ref={canvasRef} tabIndex={0} aria-label="Interactive AI generated 3D body scan model" aria-describedby={instructionsId} onKeyDown={handleCanvasKeyDown} /><figure className="model-3d-reference"><img src={generatedImage} alt="" /><figcaption>AI image reference</figcaption></figure>{viewerState === "loading" && <div className="model-3d-loading" role="status" aria-live="polite"><span className="model-3d-spinner" />Preparing interactive model…</div>}{viewerState === "fallback" && <div className="model-3d-fallback"><img src={generatedImage} alt="AI generated 3D body scan visualization" /><span>Interactive 3D is unavailable on this device. Showing the generated model image.</span></div>}<span className="model-preview-badge"><Icon name="scan" size={13} /> AI image reference · interactive 3D</span></div><div className="model-3d-controls" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div><p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Drag to rotate · scroll or pinch to zoom · focus the model and use arrow keys, +/−, or Home</p>{reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}</div>;
+  return <div className="model-3d-viewer"><div className="model-3d-stage" aria-busy={viewerState === "loading"}><canvas ref={canvasRef} tabIndex={0} aria-label="Interactive measurement-driven 3D body model" aria-describedby={instructionsId} onKeyDown={handleCanvasKeyDown} /><figure className="model-3d-reference"><img src={generatedImage} alt="" /><figcaption>Reference visual</figcaption></figure><div className="model-3d-scale" aria-label="Model scale summary"><strong>MEASURED PROPORTIONS</strong><span>{modelHeightLabel}</span><small>{measurements.length} result values mapped to the body</small></div>{viewerState === "loading" && <div className="model-3d-loading" role="status" aria-live="polite"><span className="model-3d-spinner" />Preparing measured body model…</div>}{viewerState === "fallback" && <div className="model-3d-fallback"><img src={generatedImage} alt="Reference visualization for the body measurement result" /><span>Interactive 3D is unavailable on this device. Showing the reference visual.</span></div>}<span className="model-preview-badge"><Icon name="scan" size={13} /> Measured body · interactive 3D</span></div><div className="model-3d-controls" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div><p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Drag to rotate · scroll or pinch to zoom · focus the model and use arrow keys, +/−, or Home</p>{reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}</div>;
 }
 
 function ModelViewer({ model, measurements = [], heightValue = null, heightUnit = "cm" }: { model: ScanBundle["bodyModel"]; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin" }) {
@@ -1281,9 +1551,9 @@ function ModelViewer({ model, measurements = [], heightValue = null, heightUnit 
   }, [model?.id, model?.status, model?.model_url_or_path]);
   if (localPreview) {
     const generatedImage = localPreviewPath(localPreview.generated_image) ?? localPreviewPath(localPreview.poster) ?? publicAssetPath("/media/3d-body-scan-generated.png");
-    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel generatedImage={generatedImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">GENERATED MODEL VISUAL</p><h3>Interactive 3D visualization ready</h3><p>The generated image reference now drives an interactive 3D mannequin. Drag to rotate, zoom to inspect, and toggle measurement guides. Local measurements remain illustrative estimates and must be checked by a dressmaker before tailoring.</p><Badge tone="warning">Illustrative model · verify before tailoring</Badge></div></div></div>;
+    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel generatedImage={generatedImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN MODEL</p><h3>Real proportions, mapped from the result</h3><p>The body shape uses the returned height and measurements in centimetres, and each visible guide follows the matching circumference or length. This is a visual fit model, not a scan-grade mesh; local demo values must be verified by a dressmaker.</p><Badge tone="warning">Measured visualization · verify before tailoring</Badge></div></div></div>;
   }
-  if (!model || model.status !== "ready" || !model.model_url_or_path || assetError) return <div className="model-empty model-empty-preview"><InteractiveBodyModel generatedImage={publicAssetPath("/media/3d-body-scan-generated.png")} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">REFERENCE MODEL VISUAL</p><h3>Interactive 3D preview</h3><p>{assetError || "An interactive reference model is available while the reconstruction provider prepares a personalized body asset."}</p><Badge tone="neutral">Preview only · no measurements</Badge></div></div></div>;
+  if (!model || model.status !== "ready" || !model.model_url_or_path || assetError) return <div className="model-empty model-empty-preview"><InteractiveBodyModel generatedImage={publicAssetPath("/media/3d-body-scan-generated.png")} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASUREMENT-DRIVEN PREVIEW</p><h3>Interactive 3D body model</h3><p>{assetError || "A human-form model is proportioned from the returned measurements while a provider-specific mesh is unavailable."}</p><Badge tone="teal">Result values mapped to guides</Badge></div></div></div>;
   return <div className="model-ready"><span className="model-empty-icon"><Icon name="expand" size={27} /></span><h3>{assetUrl ? "Body model asset available" : "Opening private model asset…"}</h3><p>The provider returned a model asset for authorized review.</p>{assetUrl && <a className="button button-secondary" href={assetUrl} target="_blank" rel="noreferrer">Open model asset <Icon name="external" size={15} /></a>}</div>;
 }
 

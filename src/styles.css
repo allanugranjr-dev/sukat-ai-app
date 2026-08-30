@@ -48,6 +48,10 @@ html { scroll-behavior: smooth; }
 
 .model-empty-preview { align-items: stretch; display: block; justify-content: initial; overflow: hidden; padding: 0; text-align: left; }
 .model-preview-badge { align-items: center; background: rgba(6, 33, 35, .84); border: 1px solid rgba(126, 215, 211, .55); border-radius: 999px; color: #dffaf7; display: inline-flex; font-size: 10px; gap: 6px; left: 15px; padding: 7px 10px; position: absolute; top: 15px; z-index: 2; }
+.model-3d-scale { background: rgba(5, 16, 29, .72); border: 1px solid rgba(126, 215, 211, .3); border-radius: 9px; bottom: 15px; color: rgba(230, 249, 248, .84); display: grid; gap: 3px; left: 15px; padding: 9px 10px; position: absolute; z-index: 2; }
+.model-3d-scale strong { color: #8be6dd; font-size: 8px; letter-spacing: .12em; }
+.model-3d-scale span { font-size: 11px; font-weight: 700; }
+.model-3d-scale small { color: rgba(230, 249, 248, .64); font-size: 8px; }
 .model-preview-copy { align-items: center; display: grid; gap: 17px; grid-template-columns: 67px minmax(0, 1fr); padding: 24px 28px 27px; }
 .model-preview-copy > div { min-width: 0; }
 .model-preview-copy h3 { margin: 6px 0 8px; }
@@ -694,7 +698,7 @@ button:disabled { transform: none !important; }
 .model-3d-hint { align-items: center; background: #f4f6fb; color: #7b879b; display: flex; font-size: 9px; gap: 5px; margin: 0; padding: 8px 15px 14px; }
 .model-3d-hint svg { color: #159796; }
 @keyframes model-spin { to { transform: rotate(360deg); } }
-@media (max-width: 600px) { .model-3d-stage, .model-3d-stage canvas { min-height: 360px; height: 360px; }.model-3d-reference { bottom: 12px; right: 12px; }.model-3d-reference img { height: 69px; width: 42px; }.model-3d-controls { padding-left: 11px; padding-right: 11px; }.model-3d-controls button { font-size: 8px; padding: 0 8px; }.model-3d-hint { padding-left: 11px; padding-right: 11px; } }
+@media (max-width: 600px) { .model-3d-stage, .model-3d-stage canvas { min-height: 360px; height: 360px; }.model-3d-reference { bottom: 12px; right: 12px; }.model-3d-reference img { height: 69px; width: 42px; }.model-3d-scale { bottom: 12px; left: 11px; max-width: 155px; padding: 8px 9px; }.model-3d-scale span { font-size: 10px; }.model-3d-controls { padding-left: 11px; padding-right: 11px; }.model-3d-controls button { font-size: 8px; padding: 0 8px; }.model-3d-hint { padding-left: 11px; padding-right: 11px; } }
 
 @media (max-width: 700px) {
   .marketing-header { padding: 18px; }
