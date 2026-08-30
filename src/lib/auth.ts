@@ -65,6 +65,7 @@ export async function signUpCustomer(input: {
     email: input.email.trim(),
     password: input.password,
     options: {
+      emailRedirectTo: `${window.location.origin}/?verify=1`,
       data: {
         first_name: input.firstName.trim(),
         last_name: input.lastName.trim(),
@@ -73,6 +74,20 @@ export async function signUpCustomer(input: {
   });
   if (response.error) throw new Error(readableError(response.error));
   return response;
+}
+
+export async function resendSignupConfirmation(email: string): Promise<void> {
+  if (isLocalApiMode) {
+    throw new Error("Local mode does not send verification emails. Sign in with your local account instead.");
+  }
+  const { error } = await requireSupabase().auth.resend({
+    type: "signup",
+    email: email.trim(),
+    options: {
+      emailRedirectTo: `${window.location.origin}/?verify=1`,
+    },
+  });
+  if (error) throw new Error(readableError(error));
 }
 
 export async function sendPasswordReset(email: string): Promise<void> {

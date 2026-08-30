@@ -25,6 +25,7 @@ import {
   listOrganizations,
   markNotificationRead,
   onAuthStateChange,
+  resendSignupConfirmation,
   sendPasswordReset,
   signIn,
   signOut,
@@ -328,7 +329,7 @@ function TrustPoint({ icon, title, copy }: { icon: IconName; title: string; copy
   return <div className="trust-point"><span className="trust-icon"><Icon name={icon} size={18} /></span><div><strong>{title}</strong><p>{copy}</p></div></div>;
 }
 
-function AuthPage({ mode, notice, onBack, onModeChange, onNotice }: { mode: AuthMode; notice: string; onBack: () => void; onModeChange: (mode: AuthMode) => void; onNotice: (notice: string) => void }) {
+function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification }: { mode: AuthMode; notice: string; onBack: () => void; onModeChange: (mode: AuthMode) => void; onNotice: (notice: string) => void; onVerification: (email: string) => void }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -360,8 +361,7 @@ function AuthPage({ mode, notice, onBack, onModeChange, onNotice }: { mode: Auth
         if (!consent) throw new Error("Accept the privacy notice to create your customer account.");
         const response = await signUpCustomer({ firstName, lastName, email, password });
         if (!response.data.session) {
-          onNotice("Your account was created. Check your email to verify the address before signing in.");
-          onModeChange("signin");
+          onVerification(email.trim());
         }
       }
     } catch (reason: unknown) {
@@ -393,7 +393,11 @@ function ConfiguredApp() {
   const [profileError, setProfileError] = useState("");
   const [publicView, setPublicView] = useState<AuthMode>("landing");
   const [notice, setNotice] = useState("");
+  const [verificationEmail, setVerificationEmail] = useState("");
   const inviteToken = new URLSearchParams(window.location.search).get("invite");
+  const authHash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const verificationRequested = new URLSearchParams(window.location.search).get("verify") === "1" || authHash.get("type") === "signup";
+  const verificationError = authHash.get("error_description") ?? "";
   const resetRequested = new URLSearchParams(window.location.search).get("reset") === "1" || window.location.hash.includes("type=recovery");
 
   useEffect(() => {
@@ -439,13 +443,15 @@ function ConfiguredApp() {
     const next = new URL(window.location.href);
     next.searchParams.delete("invite");
     next.searchParams.delete("reset");
-    window.history.replaceState({}, "", `${next.pathname}${next.search}${next.hash.includes("type=recovery") ? "" : next.hash}`);
+    next.searchParams.delete("verify");
+    window.history.replaceState({}, "", `${next.pathname}${next.search}`);
   };
 
   if (loading) return <FullPageLoading />;
   if (inviteToken) return <InvitationAcceptPage token={inviteToken} session={session} profile={profile} onBack={() => { clearSpecialUrl(); setPublicView("signin"); }} onAccepted={async () => { await refreshProfile(); clearSpecialUrl(); }} />;
   if (resetRequested && session) return <PasswordResetPage onComplete={() => { clearSpecialUrl(); void signOut(); }} />;
-  if (!session) return publicView === "landing" ? <LandingPage onAuth={(view) => { setNotice(""); setPublicView(view); }} /> : <AuthPage mode={publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("landing"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} />;
+  if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} verified={Boolean(session?.user.email_confirmed_at) && !verificationError} initialError={verificationError} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setPublicView("signin"); }} onContinue={() => { clearSpecialUrl(); setVerificationEmail(""); }} />;
+  if (!session) return publicView === "landing" ? <LandingPage onAuth={(view) => { setNotice(""); setPublicView(view); }} /> : <AuthPage mode={publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("landing"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
   if (!profile || !isRole(profile.role)) return <ProfileUnavailable message={profileError || "Your authenticated account does not have a valid SukatAI profile."} onSignOut={() => void signOut()} />;
   return <Workspace profile={profile} onProfileChange={setProfile} onSignOut={() => void signOut()} />;
 }
@@ -479,6 +485,56 @@ function PasswordResetPage({ onComplete }: { onComplete: () => void }) {
   return <main className="setup-page"><div className="setup-card reset-card"><Logo /><p className="eyebrow">ACCOUNT RECOVERY</p><h1>Choose a new password.</h1><p>Use a password you have not used elsewhere. Your reset link is single-purpose and expires.</p><form className="auth-form" onSubmit={submit}><Field label="New password" value={password} onChange={setPassword} placeholder="At least 8 characters" type="password" autoComplete="new-password" /><Field label="Confirm password" value={confirm} onChange={setConfirm} placeholder="Repeat your password" type="password" autoComplete="new-password" />{notice && <div className="form-notice"><Icon name="check" size={16} /> {notice}</div>}{error && <InlineError message={error} />}<Button type="submit" disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Updating…" : "Update password"}</Button></form></div></main>;
 }
 
+function EmailVerificationPage({ email, verified, initialError, onBack, onContinue }: { email: string; verified: boolean; initialError: string; onBack: () => void; onContinue: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const hasEmail = Boolean(email.trim());
+  const linkNeedsAttention = Boolean(initialError);
+
+  const resend = async () => {
+    if (!hasEmail) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await resendSignupConfirmation(email);
+      setNotice("A fresh verification email is on its way. The new link will open this page again.");
+    } catch (reason: unknown) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="auth-page verification-page">
+    <section className="auth-story"><div className="auth-story-inner"><Logo inverse /><p className="eyebrow">MEASURE WITH INTENTION</p><h1>One small step toward <em>better fit.</em></h1><p>Verify your email so your measurement workroom stays private and connected to you.</p><div className="story-list"><span><Icon name="mail" size={18} /> One secure verification link</span><span><Icon name="lock" size={18} /> Private account access</span><span><Icon name="arrow-right" size={18} /> Continue when you are ready</span></div></div><span className="story-footer">SukatAI · secure measurement workspace</span></section>
+    <section className="auth-form-panel"><div className="auth-form-wrap">
+      <div className={cn("verification-icon", verified && "verified", linkNeedsAttention && "needs-attention")} aria-hidden="true"><Icon name={verified ? "check" : linkNeedsAttention ? "info" : "mail"} size={26} /></div>
+      <div className="auth-heading"><p className="eyebrow">{verified ? "EMAIL VERIFIED" : linkNeedsAttention ? "VERIFICATION LINK" : "CHECK YOUR INBOX"}</p><h2>{verified ? "Your email is verified." : linkNeedsAttention ? "This link needs attention." : "Verify your email."}</h2><p>{verified ? "Your account is ready. Continue to open your secure SukatAI workroom." : linkNeedsAttention ? "That verification link may have expired or already been used. Request a fresh link to continue." : <>We sent a verification link to <strong>{email || "your email address"}</strong>. Open it to finish creating your account.</>}</p></div>
+      {!verified && <div className="verification-steps" aria-label="Email verification steps"><div><span>1</span><p><strong>Open the email</strong><small>Look for the message from SukatAI.</small></p></div><div><span>2</span><p><strong>Confirm your address</strong><small>The link is single-purpose and secure.</small></p></div><div><span>3</span><p><strong>Return to your workroom</strong><small>Your account will be ready to use.</small></p></div></div>}
+      {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}
+      {error && <InlineError message={error} />}
+      {verified ? <Button type="button" onClick={onContinue} icon="arrow-right">Continue to SukatAI</Button> : <div className="verification-actions"><Button type="button" onClick={() => void resend()} disabled={!hasEmail || busy} icon="mail">{busy ? "Sending…" : "Resend verification email"}</Button><button type="button" className="text-button" onClick={onBack}>Use a different email</button></div>}
+      <p className="verification-note"><Icon name="shield" size={15} /> If you do not see the message, check your spam or promotions folder.</p>
+    </div></section>
+  </div>;
+}
+
+function InvitationWelcomePage({ session, onBack, onContinue }: { session: Session | null; onBack: () => void; onContinue?: () => void }) {
+  const signedIn = Boolean(session);
+  return <div className="auth-page invitation-welcome-page">
+    <section className="auth-story"><div className="auth-story-inner"><Logo inverse /><p className="eyebrow">YOUR WORKROOM AWAITS</p><h1>Make room for <em>better work.</em></h1><p>Someone has invited you to a private SukatAI dressmaking workspace.</p><div className="story-list"><span><Icon name="users" size={18} /> Organization-scoped access</span><span><Icon name="ruler" size={18} /> Reviewable measurements</span><span><Icon name="lock" size={18} /> Private customer photos</span></div></div><span className="story-footer">SukatAI · secure measurement workspace</span></section>
+    <section className="auth-form-panel"><div className="auth-form-wrap">
+      <div className="verification-icon invite-welcome-icon" aria-hidden="true"><Icon name="mail" size={26} /></div>
+      <div className="auth-heading"><p className="eyebrow">SECURE INVITATION</p><h2>You’ve been invited.</h2><p>{signedIn ? <>This invitation is addressed to <strong>{session?.user.email}</strong>. Continue to review the invitation and activate your dressmaker account.</> : "Open this page from the invitation email, then sign in with the same email address to continue."}</p></div>
+      <div className="invite-welcome-details"><div><Icon name="shield" size={17} /><span><strong>Verified when accepted</strong><small>The server checks the one-time invitation before granting access.</small></span></div><div><Icon name="clock" size={17} /><span><strong>Available for 7 days</strong><small>Ask the administrator for a new invitation if this one expires.</small></span></div></div>
+      {signedIn ? <Button type="button" onClick={onContinue} icon="arrow-right">Review and activate account</Button> : <Button type="button" onClick={onBack} icon="arrow-right">Go to sign in</Button>}
+      <button type="button" className="text-button invitation-back-link" onClick={onBack}>{signedIn ? "Use a different account" : "Return to sign in"}</button>
+    </div></section>
+  </div>;
+}
+
 function InvitationAcceptPage({ token, session, profile, onBack, onAccepted }: { token: string; session: Session | null; profile: Profile | null; onBack: () => void; onAccepted: () => Promise<void> }) {
   const [firstName, setFirstName] = useState(profile?.first_name ?? String(session?.user.user_metadata?.first_name ?? ""));
   const [lastName, setLastName] = useState(profile?.last_name ?? String(session?.user.user_metadata?.last_name ?? ""));
@@ -486,9 +542,8 @@ function InvitationAcceptPage({ token, session, profile, onBack, onAccepted }: {
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  if (!session) {
-    return <main className="setup-page"><div className="setup-card"><Logo /><Badge tone="warning" dot>Invitation link</Badge><h1>Sign in from your invitation email.</h1><p>This dressmaker invitation opens a secure Supabase Auth session before you choose a password and join the assigned organization.</p><Button variant="secondary" onClick={onBack} icon="arrow-left">Go to sign in</Button></div></main>;
-  }
+  const [setupStarted, setSetupStarted] = useState(false);
+  if (!session || !setupStarted) return <InvitationWelcomePage session={session} onBack={onBack} onContinue={() => setSetupStarted(true)} />;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");

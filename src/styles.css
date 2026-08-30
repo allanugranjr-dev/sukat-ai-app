@@ -1372,3 +1372,36 @@ button:focus:not(:focus-visible) { outline: none; }
   *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition-duration: 0ms !important; }
   .app-sidebar { transition: none; }
 }
+
+/* Dedicated email and invitation states. Keep the auth shell familiar while making the next action obvious. */
+.verification-page .auth-form-wrap, .invitation-welcome-page .auth-form-wrap { max-width: 520px; }
+.verification-icon { align-items: center; background: var(--teal-soft); border: 1px solid #acd9d5; border-radius: 14px; color: var(--teal-dark); display: inline-flex; height: 58px; justify-content: center; margin-bottom: 24px; width: 58px; }
+.verification-icon.verified { background: var(--green-soft); border-color: #b9dfc7; color: var(--green); }
+.verification-icon.needs-attention { background: var(--gold-soft); border-color: #e7d08b; color: var(--gold); }
+.verification-steps { background: #f7fafb; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 0; margin: 24px 0; padding: 6px 16px; }
+.verification-steps > div { align-items: center; border-bottom: 1px solid var(--soft-line); display: flex; gap: 12px; padding: 13px 0; }
+.verification-steps > div:last-child { border-bottom: 0; }
+.verification-steps > div > span { align-items: center; background: var(--teal); border-radius: 50%; color: #fff; display: inline-flex; flex: 0 0 auto; font-size: 13px; font-weight: 700; height: 28px; justify-content: center; width: 28px; }
+.verification-steps p { display: grid; gap: 2px; margin: 0; }
+.verification-steps strong { color: var(--navy); font-size: 15px; }
+.verification-steps small { color: var(--muted); font-size: 14px; line-height: 1.4; }
+.verification-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 14px; }
+.verification-actions .text-button { color: var(--teal-dark); }
+.verification-note { align-items: flex-start; color: var(--muted); display: flex; font-size: 14px; gap: 8px; line-height: 1.5; margin: 22px 0 0; }
+.verification-note svg { color: var(--teal); flex: 0 0 auto; margin-top: 2px; }
+.invite-welcome-icon { background: var(--gold-soft); border-color: #e7d08b; color: var(--gold); }
+.invite-welcome-details { background: #f7fafb; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 0; margin: 24px 0; padding: 5px 16px; }
+.invite-welcome-details > div { align-items: flex-start; border-bottom: 1px solid var(--soft-line); display: flex; gap: 12px; padding: 14px 0; }
+.invite-welcome-details > div:last-child { border-bottom: 0; }
+.invite-welcome-details > div > svg { color: var(--teal); flex: 0 0 auto; margin-top: 2px; }
+.invite-welcome-details span { display: grid; gap: 3px; }
+.invite-welcome-details strong { color: var(--navy); font-size: 15px; }
+.invite-welcome-details small { color: var(--muted); font-size: 14px; line-height: 1.45; }
+.invitation-back-link { display: block; margin-top: 18px; }
+
+@media (max-width: 600px) {
+  .verification-actions { align-items: stretch; flex-direction: column; }
+  .verification-actions .button, .verification-actions .text-button { width: 100%; }
+  .verification-actions .text-button { text-align: left; }
+  .verification-steps, .invite-welcome-details { padding-left: 13px; padding-right: 13px; }
+}
