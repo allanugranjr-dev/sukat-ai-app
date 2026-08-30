@@ -2,7 +2,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 const url = (import.meta.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
 const anonKey = (import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
-const backendMode = (import.meta.env.VITE_BACKEND_MODE ?? "").trim().toLowerCase();
+const configuredBackendMode = (import.meta.env.VITE_BACKEND_MODE ?? "").trim().toLowerCase();
+const backendMode = configuredBackendMode || (import.meta.env.MODE === "node" ? "node" : "");
 
 export const isXamppMode = backendMode === "xampp";
 export const isNodeMode = backendMode === "node";
