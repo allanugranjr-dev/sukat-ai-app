@@ -945,3 +945,95 @@ body { min-width: 320px; }
 @media (prefers-reduced-motion: reduce) {
   .processing-progress-track span, .measurement-table tbody tr { transition: none; }
 }
+
+/* North-star pass: a quiet, dark measurement workroom around clear data surfaces. */
+:root {
+  --workspace: #08131f;
+  --workspace-raised: #0d1d2c;
+  --workspace-line: #20384b;
+  --workspace-text: #e8f0f5;
+}
+
+body { background: var(--workspace); }
+.marketing-page { background: #f5f7f8; }
+.marketing-header, .hero-section { background: #07111f; }
+.hero-section::before { display: none; }
+.hero-section::after { border-color: rgba(74, 190, 204, .18); }
+.hero-preview { background: #0e1d2d; border-color: #29465a; box-shadow: 0 25px 50px rgba(0, 0, 0, .3); color: var(--workspace-text); transform: none; }
+.preview-glow { display: none; }
+.preview-card-header, .preview-confidence, .preview-reviewer, .preview-footer { border-color: #254154; }
+.preview-kicker, .preview-side-top > span, .preview-footer, .preview-confidence small, .preview-reviewer small { color: #91a8b8; }
+.preview-confidence strong, .preview-reviewer strong { color: #eef6fa; }
+.preview-model-area { background: #061321; border: 1px solid #1e4657; }
+.landing-scan-art { opacity: .92; }
+.landing-scan-art img { object-position: 50% center; }
+.preview-ring { border-color: rgba(85, 220, 212, .32); }
+.capture-line { background: rgba(85, 220, 212, .36); }
+.capture-visual-center { color: #effaff; text-shadow: 0 1px 14px rgba(0, 0, 0, .7); }
+.capture-visual-center small { color: #9ed2d3; }
+.preview-mini-list span { color: #b2c3cd; }
+.preview-footer svg, .preview-mini-list svg, .preview-reviewer > svg { color: #74d8d3; }
+
+.app-shell { background: var(--workspace); }
+.app-sidebar { background: #06101b; border-right: 1px solid var(--workspace-line); }
+.side-nav-item.active { background: #123d4b; box-shadow: inset 3px 0 #e3ab2f; }
+.app-topbar { background: #0a1725; border-bottom-color: var(--workspace-line); }
+.topbar-context strong, .topbar-profile strong, .mobile-menu, .notification-button { color: var(--workspace-text); }
+.topbar-context .eyebrow { color: #72d4d0; }
+.topbar-profile { border-left-color: var(--workspace-line); }
+.topbar-profile small { color: #8da1b2; }
+.workspace-content { color: var(--workspace-text); }
+.section-header h1 { color: #f1f6f8; }
+.section-description { color: #9cafbd; }
+.welcome-banner { background: #0d2637; border-color: #1c5962; }
+.welcome-banner::before { display: none; }
+.panel, .stat-card { background: #f5f8fb; }
+.stat-card-clickable { border-color: #cbd8e2; }
+.stat-card-clickable:hover { border-color: #6bbdb9; box-shadow: 0 10px 24px rgba(0, 0, 0, .2); }
+.stat-card > svg { color: var(--teal-dark); margin-left: auto; }
+.scan-prompt { background: #eef7f7; }
+
+.page-stack > .loading-state, .page-stack > .error-state { background: var(--workspace-raised); border: 1px solid var(--workspace-line); border-radius: 18px; color: #b8cbd5; }
+.page-stack > .loading-state .data-state-icon { background: #173746; color: #8ae0d8; }
+.page-stack > .loading-state p { color: #a8bdc9; }
+
+.scan-progress { background: var(--workspace-raised); border: 1px solid var(--workspace-line); border-radius: 14px; padding: 14px 16px 5px; }
+.scan-progress-step { color: #8da4b3; }
+.scan-progress-step small { color: #a7bac5; }
+.scan-progress-step.active, .scan-progress-step.complete { color: #7fe0d6; }
+.scan-progress-step.active small, .scan-progress-step.complete small { color: #d3efec; }
+.scan-progress-step > span { background: #10283a; border-color: #3c596c; color: #aec0ca; }
+.scan-progress-step > i { background: #2a4558; }
+.scan-progress-step.complete > i { background: #2b8b86; }
+
+.model-3d-viewer { background: #0b1b2a; border-color: #203b4f; }
+.model-3d-stage { background: #06111f; }
+.model-3d-scale { background: rgba(5, 17, 30, .84); border-color: rgba(93, 207, 207, .3); color: #d8f0ee; }
+.model-3d-scale span { color: #f0f8f8; }
+.model-3d-scale small { color: #9fb8c3; }
+.model-3d-controls, .model-3d-hint { background: #0b1b2a; border-color: #203b4f; }
+.model-3d-controls button { background: #122b3b; border-color: #2d5362; color: #d5e3e8; }
+.model-3d-controls button:hover:not(:disabled), .model-3d-controls button.active { background: #164a53; border-color: #69c8c1; color: #f2fffd; }
+.model-3d-hint { color: #9fb6c1; }
+.model-3d-motion-note { background: #172d4b; color: #cbd8ff; }
+
+.measurement-highlight { appearance: none; border-color: #d4dfe8; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.measurement-highlight:hover { border-color: #86c8c4; transform: translateY(-1px); }
+.measurement-highlight.selected { background: #eaf8f6; border-color: #2c9b96; box-shadow: inset 3px 0 #227472; }
+.measurement-highlight > em { align-items: center; color: var(--teal-dark); display: flex; font-size: 10px; font-style: normal; font-weight: 700; gap: 5px; margin-top: 2px; }
+.measurement-row.selected th, .measurement-row.selected td { background: #eaf8f6; }
+.measurement-row.selected .table-accent { background: #d49a1d; }
+.results-tabs button { color: #64748b; }
+.results-tabs button.active { color: var(--teal-dark); }
+
+@media (max-width: 700px) {
+  .app-sidebar { border-right: 0; border-bottom: 1px solid var(--workspace-line); }
+  .app-topbar { background: #0a1725; }
+  .workspace-content { padding-top: 27px; }
+  .stat-card > svg { display: none; }
+  .hero-preview { transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .measurement-highlight { transition: none; }
+}
