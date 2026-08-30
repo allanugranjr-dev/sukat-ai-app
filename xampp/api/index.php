@@ -124,6 +124,11 @@ function uuid(): string
     return substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-4' . substr($hex, 13, 3) . '-a' . substr($hex, 16, 3) . '-' . substr($hex, 19, 12);
 }
 
+function isUuid(string $value): bool
+{
+    return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value) === 1;
+}
+
 function mysqlDateTime(?string $value): ?string
 {
     if ($value === null || $value === '') return null;
@@ -694,6 +699,32 @@ try {
             requireAdmin();
             $statement = database()->query('SELECT * FROM dressmaker_invitations ORDER BY created_at DESC');
             jsonResponse(array_map('invitationResponse', $statement->fetchAll()));
+        }
+
+        case 'revoke_dressmaker_invitation': {
+            requireAdmin();
+            $data = requestData();
+            $invitationId = stringInput($data, 'invitation_id', '') ?? '';
+            if (!isUuid($invitationId)) throw new SukatApiException('A valid invitation ID is required.', 400);
+            $statement = database()->prepare('SELECT id, accepted_at, revoked_at, expires_at, expires_at <= NOW() AS is_expired FROM dressmaker_invitations WHERE id = ? LIMIT 1');
+            $statement->execute([$invitationId]);
+            $invitation = $statement->fetch() ?: null;
+            if (!$invitation) throw new SukatApiException('Invitation not found.', 404);
+            if ($invitation['accepted_at'] !== null) throw new SukatApiException('Accepted invitations cannot be revoked.', 409);
+            if ($invitation['revoked_at'] !== null) jsonResponse(['revoked' => false, 'already_revoked' => true]);
+            if ((int) $invitation['is_expired'] === 1) throw new SukatApiException('Expired invitations cannot be revoked. Send a new invitation.', 400);
+            $statement = database()->prepare('UPDATE dressmaker_invitations SET revoked_at = NOW() WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()');
+            $statement->execute([$invitationId]);
+            if ($statement->rowCount() === 0) {
+                $statement = database()->prepare('SELECT accepted_at, revoked_at, expires_at, expires_at <= NOW() AS is_expired FROM dressmaker_invitations WHERE id = ? LIMIT 1');
+                $statement->execute([$invitationId]);
+                $current = $statement->fetch() ?: null;
+                if ($current && $current['revoked_at'] !== null) jsonResponse(['revoked' => false, 'already_revoked' => true]);
+                if ($current && $current['accepted_at'] !== null) throw new SukatApiException('Accepted invitations cannot be revoked.', 409);
+                if ($current && (int) $current['is_expired'] === 1) throw new SukatApiException('Expired invitations cannot be revoked. Send a new invitation.', 400);
+                throw new SukatApiException('The invitation could not be revoked. Please try again.', 409);
+            }
+            jsonResponse(['revoked' => true]);
         }
 
         case 'invite_dressmaker': {

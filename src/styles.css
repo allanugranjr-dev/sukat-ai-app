@@ -671,11 +671,16 @@ button:disabled { transform: none !important; }
 .notification-preferences .consent-label { color: var(--ink); font-size: 11px; }
 .profile-fields .field-hint { margin-top: -2px; }
 .invitation-row > .badge { flex: 0 0 auto; white-space: nowrap; }
+.invitation-action-message { margin: 16px 0 10px; }
+.invitation-list > .form-error { margin: 16px 0 10px; }
+.invitation-remove { flex: 0 0 auto; font-size: 10px; min-height: 32px; padding: 0 9px; }
+.invitation-remove:hover:not(:disabled) { background: var(--red-soft); color: var(--red); }
 
 @media (max-width: 980px) {
   .invitation-row { align-items: flex-start; flex-wrap: wrap; }
   .invitation-row > div { min-width: min(220px, 100%); }
   .invitation-row > .invite-expiry { margin-left: 40px; }
+  .invitation-row > .invitation-remove { margin-left: 40px; }
 }
 .capture-stage, .processing-visual { border-radius: 16px; }
 .capture-actions > input.sr-only:focus-visible + label { outline: 3px solid rgba(49, 88, 217, .34); outline-offset: 3px; }

@@ -25,6 +25,7 @@ import {
   listOrganizations,
   markNotificationRead,
   onAuthStateChange,
+  revokeDressmakerInvitation,
   resendSignupConfirmation,
   sendPasswordReset,
   signIn,
@@ -57,6 +58,7 @@ import {
 } from "./lib/data";
 import { isHeightValid, parseHeightInches, previousScanPosition, scanSteps, type ScanStep, validateUpload } from "./lib/scanFlow";
 import { ellipseRadiiForCircumference, modelHeightCm, modelMeasurementCm, normalizeModelMeasurementKey } from "./lib/measurementMapping";
+import { invitationState, isRevocableInvitation } from "./lib/invitationLifecycle";
 import { requestScanProcessing, processingCopy } from "./lib/reconstructionProvider";
 import { createSignedStorageUrl, deleteScanAsset, uploadScanAsset } from "./lib/storage";
 import { subscribeToNodeScan } from "./lib/nodeApi";
@@ -2246,16 +2248,69 @@ function AdminInvitations({ profile }: { profile: Profile }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [removingId, setRemovingId] = useState("");
+  const [removeError, setRemoveError] = useState("");
+  const [removeNotice, setRemoveNotice] = useState("");
   useEffect(() => { if (!organizationId && organizations[0]) setOrganizationId(organizations[0].id); }, [organizationId, organizations]);
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); setError(""); setNotice(""); setInviteUrl("");
+    event.preventDefault(); setError(""); setNotice(""); setInviteUrl(""); setRemoveError(""); setRemoveNotice("");
     if (!email.trim() || !organizationId) { setError("Enter an email and choose an organization."); return; }
     setBusy(true);
     try { const result = await inviteDressmaker({ email, organizationId, redirectTo: `${invitationAppOrigin()}/?invite=` }); setNotice(result.emailStatus === "sent" ? "Invitation created and sent by email." : "Invitation created. Email delivery is not configured yet, so share the secure link below."); setInviteUrl(result.inviteUrl ?? ""); setEmail(""); invitationsState.reload(); } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
   };
+  const removeInvitation = async (invitation: Invitation) => {
+    if (!isRevocableInvitation(invitation) || removingId) return;
+    if (!window.confirm(`Remove the invitation for ${invitation.email}? They will need a new invitation.`)) return;
+    setRemovingId(invitation.id); setRemoveError(""); setRemoveNotice(""); setError(""); setNotice(""); setInviteUrl("");
+    try {
+      await revokeDressmakerInvitation(invitation.id);
+      setEmail(invitation.email);
+      setOrganizationId(invitation.organization_id);
+      setRemoveNotice(`Invitation removed. You can send a new invitation to ${invitation.email}.`);
+      invitationsState.reload();
+    } catch (reason: unknown) {
+      setRemoveError(readableError(reason));
+    } finally {
+      setRemovingId("");
+    }
+  };
   const organizationName = (id: string) => organizations.find((organization) => organization.id === id)?.name ?? id.slice(0, 8);
-  const invitationState = (invitation: Invitation) => invitation.accepted_at ? "Accepted" : invitation.revoked_at ? "Revoked" : new Date(invitation.expires_at) < new Date() ? "Expired" : "Pending";
-  return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE · INVITATIONS" title="Invite a dressmaker" description="Create an organization-scoped invitation and send it to the dressmaker’s email address." action={<Button variant="secondary" icon="refresh" onClick={() => { organizationsState.reload(); invitationsState.reload(); }}>Refresh</Button>} />{organizationsState.loading || invitationsState.loading ? <LoadingState /> : organizationsState.error || invitationsState.error ? <ErrorState message={organizationsState.error || invitationsState.error} onRetry={() => { organizationsState.reload(); invitationsState.reload(); }} /> : <div className="invitation-layout"><Panel className="invite-form-panel"><span className="invite-form-icon"><Icon name="mail" size={20} /></span><p className="eyebrow">INVITATION-ONLY ACCESS</p><h2>Send a secure invite.</h2><p>The invite is stored with a one-time hashed token and delivered through the configured email provider.</p>{organizations.length === 0 ? <DataState icon="users" title="Create an organization first" body="An organization is required before a dressmaker can be invited." /> : <form className="simple-form" onSubmit={submit}><Field label="Dressmaker email" value={email} onChange={setEmail} placeholder="dressmaker@domain.com" type="email" /><div className="field"><label htmlFor="invite-organization">Organization</label><select id="invite-organization" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></div><div className="invite-lock-note"><Icon name="lock" size={15} /> The raw invitation token is never stored in the database.</div>{notice && <div className="form-notice"><Icon name="check" size={15} /> {notice}</div>}{inviteUrl && <div className="field invite-link-field"><label htmlFor="invite-link">Secure invite link</label><input id="invite-link" readOnly value={inviteUrl} onFocus={(event) => event.currentTarget.select()} /></div>}{error && <InlineError message={error} />}<Button type="submit" disabled={busy} icon="mail">{busy ? "Creating invite…" : "Create invitation"}</Button></form>}</Panel><Panel className="invitation-list"><div className="panel-heading"><div><p className="eyebrow">INVITATION LOG</p><h2>{invitations.length ? `${invitations.length} invitation${invitations.length === 1 ? "" : "s"}` : "No invitations yet"}</h2></div><Badge tone="neutral">Delivery logged</Badge></div>{invitations.length === 0 ? <DataState icon="mail" title="No invitations yet" body="Invitation records created by administrators will appear here." /> : invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><Avatar initialsText={invitation.email.slice(0, 2).toUpperCase()} tone="gold" size="sm" /><div><strong>{invitation.email}</strong><small>{organizationName(invitation.organization_id)} · Created {formatDate(invitation.created_at)}</small></div><span className="invite-expiry">Expires {formatDate(invitation.expires_at)}</span><Badge tone={invitationState(invitation) === "Accepted" ? "success" : invitationState(invitation) === "Pending" ? "warning" : "neutral"}>{invitationState(invitation)}</Badge>{invitation.email_delivery_status && <Badge tone={invitation.email_delivery_status === "sent" ? "success" : invitation.email_delivery_status === "failed" ? "danger" : "warning"}>{invitation.email_delivery_status === "sent" ? "Email sent" : invitation.email_delivery_status === "not_configured" ? "Email not configured" : "Email " + invitation.email_delivery_status}</Badge>}</div>)}</Panel></div>}</div>;
+  return <div className="page-stack">
+    <SectionHeader eyebrow="ADMIN CONSOLE · INVITATIONS" title="Invite a dressmaker" description="Create an organization-scoped invitation and send it to the dressmaker’s email address." action={<Button variant="secondary" icon="refresh" onClick={() => { organizationsState.reload(); invitationsState.reload(); }}>Refresh</Button>} />
+    {organizationsState.loading || invitationsState.loading ? <LoadingState /> : organizationsState.error || invitationsState.error ? <ErrorState message={organizationsState.error || invitationsState.error} onRetry={() => { organizationsState.reload(); invitationsState.reload(); }} /> : <div className="invitation-layout">
+      <Panel className="invite-form-panel">
+        <span className="invite-form-icon"><Icon name="mail" size={20} /></span>
+        <p className="eyebrow">INVITATION-ONLY ACCESS</p>
+        <h2>Send a secure invite.</h2>
+        <p>The invite is stored with a one-time hashed token and delivered through the configured email provider.</p>
+        {organizations.length === 0 ? <DataState icon="users" title="Create an organization first" body="An organization is required before a dressmaker can be invited." /> : <form className="simple-form" onSubmit={submit}>
+          <Field label="Dressmaker email" value={email} onChange={setEmail} placeholder="dressmaker@domain.com" type="email" />
+          <div className="field"><label htmlFor="invite-organization">Organization</label><select id="invite-organization" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></div>
+          <div className="invite-lock-note"><Icon name="lock" size={15} /> The raw invitation token is never stored in the database.</div>
+          {notice && <div className="form-notice"><Icon name="check" size={15} /> {notice}</div>}
+          {inviteUrl && <div className="field invite-link-field"><label htmlFor="invite-link">Secure invite link</label><input id="invite-link" readOnly value={inviteUrl} onFocus={(event) => event.currentTarget.select()} /></div>}
+          {error && <InlineError message={error} />}
+          <Button type="submit" disabled={busy} icon="mail">{busy ? "Creating invite…" : "Create invitation"}</Button>
+        </form>}
+      </Panel>
+      <Panel className="invitation-list">
+        <div className="panel-heading"><div><p className="eyebrow">INVITATION LOG</p><h2>{invitations.length ? `${invitations.length} invitation${invitations.length === 1 ? "" : "s"}` : "No invitations yet"}</h2></div><Badge tone="neutral">Delivery logged</Badge></div>
+        {removeNotice && <div className="form-notice invitation-action-message" role="status"><Icon name="check" size={15} /> {removeNotice}</div>}
+        {removeError && <InlineError message={removeError} />}
+        {invitations.length === 0 ? <DataState icon="mail" title="No invitations yet" body="Invitation records created by administrators will appear here." /> : invitations.map((invitation) => {
+          const state = invitationState(invitation);
+          return <div className="invitation-row" key={invitation.id}>
+            <Avatar initialsText={invitation.email.slice(0, 2).toUpperCase()} tone="gold" size="sm" />
+            <div><strong>{invitation.email}</strong><small>{organizationName(invitation.organization_id)} · Created {formatDate(invitation.created_at)}</small></div>
+            <span className="invite-expiry">Expires {formatDate(invitation.expires_at)}</span>
+            <Badge tone={state === "Accepted" ? "success" : state === "Pending" ? "warning" : "neutral"}>{state}</Badge>
+            {invitation.email_delivery_status && <Badge tone={invitation.email_delivery_status === "sent" ? "success" : invitation.email_delivery_status === "failed" ? "danger" : "warning"}>{invitation.email_delivery_status === "sent" ? "Email sent" : invitation.email_delivery_status === "not_configured" ? "Email not configured" : "Email " + invitation.email_delivery_status}</Badge>}
+            {state === "Pending" && <Button variant="ghost" icon="x" className="invitation-remove" onClick={() => void removeInvitation(invitation)} disabled={Boolean(removingId)} aria-label={`Remove invitation for ${invitation.email}`}>{removingId === invitation.id ? "Removing…" : "Remove"}</Button>}
+          </div>;
+        })}
+      </Panel>
+    </div>}
+  </div>;
 }
 
 function AdminOrders() {

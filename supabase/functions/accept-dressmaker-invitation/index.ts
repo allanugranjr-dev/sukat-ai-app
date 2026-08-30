@@ -14,7 +14,9 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: "Request body must be valid JSON." }, 400);
     }
     const token = body.token?.trim() ?? "";
-    const invitationId = typeof user.user_metadata?.invitation_id === "string" ? user.user_metadata.invitation_id.trim() : "";
+    const serverInvitationId = typeof user.app_metadata?.sukat_ai_invitation_id === "string" ? user.app_metadata.sukat_ai_invitation_id.trim() : "";
+    const legacyInvitationId = typeof user.user_metadata?.invitation_id === "string" ? user.user_metadata.invitation_id.trim() : "";
+    const invitationId = serverInvitationId || legacyInvitationId;
     const firstName = body.firstName?.trim() ?? "";
     const lastName = body.lastName?.trim() ?? "";
     if ((!token && !invitationId) || !firstName || !lastName || firstName.length > 80 || lastName.length > 80) return jsonResponse({ error: "Open the invitation link again, then enter your name." }, 400);

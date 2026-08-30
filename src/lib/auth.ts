@@ -202,6 +202,23 @@ export async function inviteDressmaker(input: {
   return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null, emailStatus: "sent", emailError: null };
 }
 
+export async function revokeDressmakerInvitation(invitationId: string): Promise<void> {
+  const id = invitationId.trim();
+  if (!id) throw new Error("A valid invitation ID is required.");
+  if (isLocalApiMode) {
+    await xamppRequest("revoke_dressmaker_invitation", { body: { invitation_id: id } });
+    return;
+  }
+  const { data, error } = await requireSupabase().functions.invoke("revoke-dressmaker-invitation", {
+    body: { invitation_id: id },
+  });
+  if (error) throw new Error(readableError(error));
+  const payload = data as { revoked?: boolean; already_revoked?: boolean } | null;
+  if (!payload?.revoked && !payload?.already_revoked) {
+    throw new Error("The invitation service returned an incomplete response.");
+  }
+}
+
 export async function acceptDressmakerInvitation(input: {
   token?: string;
   firstName: string;
