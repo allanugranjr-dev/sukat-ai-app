@@ -1037,3 +1037,35 @@ body { background: var(--workspace); }
 @media (prefers-reduced-motion: reduce) {
   .measurement-highlight { transition: none; }
 }
+/* Interaction motion communicates capture, processing, and result state without moving layout. */
+.processing-visual .orbit-one { border: 1px solid rgba(16,139,141,.28); border-radius: 50%; height: 68%; position: absolute; width: 58%; }
+.processing-visual .orbit-two { border: 1px dashed rgba(16,139,141,.2); border-radius: 50%; height: 82%; position: absolute; transform: rotate(35deg); width: 72%; }
+.processing-core { align-items: center; background: #fff; border: 1px solid #bfe1de; border-radius: 50%; box-shadow: 0 9px 20px rgba(16,139,141,.12); color: var(--teal-dark); display: inline-flex; height: 68px; justify-content: center; position: relative; width: 68px; z-index: 1; }
+.processing-marker { background: var(--gold); border: 2px solid #fff; border-radius: 50%; height: 9px; position: absolute; width: 9px; }
+.processing-marker.marker-one { left: 22%; top: 28%; }
+.processing-marker.marker-two { right: 21%; top: 42%; }
+.processing-marker.marker-three { bottom: 24%; left: 39%; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .processing-visual .orbit-one { animation: processing-orbit-a 8s linear infinite; }
+  .processing-visual .orbit-two { animation: processing-orbit-b 11s linear infinite reverse; }
+  .processing-core { animation: processing-core-pulse 2.8s ease-in-out infinite; }
+  .processing-marker { animation: processing-marker-pulse 2.4s ease-in-out infinite; }
+  .processing-marker.marker-two { animation-delay: .35s; }
+  .processing-marker.marker-three { animation-delay: .7s; }
+  .capture-guide::before { animation: capture-scan-line 3.2s ease-in-out infinite; }
+  .results-layout > .results-viewer, .results-layout > .results-panel, .results-layout > .results-actions { animation: results-reveal .34s var(--ease-out) both; }
+  .results-layout > .results-panel { animation-delay: .07s; }
+  .results-layout > .results-actions { animation-delay: .14s; }
+  .measurement-highlight { animation: results-reveal .3s var(--ease-out) both; }
+  .measurement-highlight:nth-child(2) { animation-delay: .05s; }
+  .measurement-highlight:nth-child(3) { animation-delay: .1s; }
+  .measurement-highlight:nth-child(4) { animation-delay: .15s; }
+}
+
+@keyframes processing-orbit-a { from { transform: translate(-50%,-50%) rotate(0deg); } to { transform: translate(-50%,-50%) rotate(360deg); } }
+@keyframes processing-orbit-b { from { transform: translate(-50%,-50%) rotate(35deg); } to { transform: translate(-50%,-50%) rotate(-325deg); } }
+@keyframes processing-core-pulse { 0%, 100% { box-shadow: 0 9px 20px rgba(16,139,141,.12); } 50% { box-shadow: 0 12px 28px rgba(16,139,141,.23); } }
+@keyframes processing-marker-pulse { 0%, 100% { opacity: .55; transform: scale(.82); } 50% { opacity: 1; transform: scale(1.15); } }
+@keyframes capture-scan-line { 0%, 100% { opacity: .35; transform: translateY(-3px); } 50% { opacity: 1; transform: translateY(3px); } }
+@keyframes results-reveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
