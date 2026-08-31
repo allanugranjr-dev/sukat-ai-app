@@ -370,6 +370,26 @@ function organizationResponse(organization) {
   };
 }
 
+async function activeOrganizationId() {
+  const active = await row(
+    "SELECT id FROM organizations WHERE JSON_UNQUOTE(JSON_EXTRACT(settings, '$.active')) = 'true' ORDER BY created_at, id LIMIT 1",
+  );
+  if (active?.id) return active.id;
+  const organizations = await rows("SELECT id FROM organizations ORDER BY created_at, id LIMIT 2");
+  return organizations.length === 1 ? organizations[0].id : null;
+}
+
+async function ensureActiveOrganizationMarker() {
+  const active = await row(
+    "SELECT id FROM organizations WHERE JSON_UNQUOTE(JSON_EXTRACT(settings, '$.active')) = 'true' ORDER BY created_at, id LIMIT 1",
+  );
+  if (active?.id) return active.id;
+  const first = await row("SELECT id FROM organizations ORDER BY created_at, id LIMIT 1");
+  if (!first?.id) return null;
+  await execute("UPDATE organizations SET settings = JSON_SET(COALESCE(settings, JSON_OBJECT()), '$.active', true) WHERE id = ?", [first.id]);
+  return first.id;
+}
+
 function scanResponse(scan) {
   return {
     id: scan.id,
@@ -827,10 +847,11 @@ async function handleAction(req, res) {
       if (!firstName || !lastName || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new ApiError("Enter a valid name and email address.", 400);
       if (password.length < 8) throw new ApiError("Use a password with at least 8 characters.", 400);
       const id = randomUUID();
+      const organizationId = await activeOrganizationId();
       try {
         await execute(
-          "INSERT INTO users (id, role, first_name, last_name, email, password_hash, unit_system) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [id, "customer", firstName.slice(0, 80), lastName.slice(0, 80), email, await bcrypt.hash(password, 12), "cm"],
+          "INSERT INTO users (id, role, organization_id, first_name, last_name, email, password_hash, unit_system) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [id, "customer", organizationId, firstName.slice(0, 80), lastName.slice(0, 80), email, await bcrypt.hash(password, 12), "cm"],
         );
       } catch (error) {
         if (isDuplicateError(error)) throw new ApiError("An account with that email already exists.", 409);
@@ -1177,6 +1198,7 @@ async function handleAction(req, res) {
       if (name.length < 2) throw new ApiError("Enter an organization name.", 400);
       const id = randomUUID();
       await execute("INSERT INTO organizations (id, name, owner_id, settings) VALUES (?, ?, ?, ?)", [id, name.slice(0, 120), user.id, "{}"]);
+      await ensureActiveOrganizationMarker();
       return sendData(res, organizationResponse(await row("SELECT * FROM organizations WHERE id = ? LIMIT 1", [id])));
     }
 

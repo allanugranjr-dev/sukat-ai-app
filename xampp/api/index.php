@@ -234,6 +234,32 @@ function organizationResponse(array $row): array
     ];
 }
 
+function activeOrganizationId(): ?string
+{
+    $statement = database()->query("SELECT id FROM organizations WHERE JSON_UNQUOTE(JSON_EXTRACT(settings, '$.active')) = 'true' ORDER BY created_at, id LIMIT 1");
+    $activeId = $statement->fetchColumn();
+    if (is_string($activeId) && $activeId !== '') return $activeId;
+
+    $statement = database()->query('SELECT id FROM organizations ORDER BY created_at, id LIMIT 2');
+    $organizations = $statement->fetchAll();
+    return count($organizations) === 1 ? (string) $organizations[0]['id'] : null;
+}
+
+function ensureActiveOrganizationMarker(): ?string
+{
+    $statement = database()->query("SELECT id FROM organizations WHERE JSON_UNQUOTE(JSON_EXTRACT(settings, '$.active')) = 'true' ORDER BY created_at, id LIMIT 1");
+    $activeId = $statement->fetchColumn();
+    if (is_string($activeId) && $activeId !== '') return $activeId;
+
+    $statement = database()->query('SELECT id FROM organizations ORDER BY created_at, id LIMIT 1');
+    $first = $statement->fetch();
+    if (!$first) return null;
+
+    $statement = database()->prepare("UPDATE organizations SET settings = JSON_SET(COALESCE(settings, JSON_OBJECT()), '$.active', true) WHERE id = ?");
+    $statement->execute([$first['id']]);
+    return (string) $first['id'];
+}
+
 function scanResponse(array $row): array
 {
     return [
@@ -577,9 +603,10 @@ try {
             if ($firstName === '' || $lastName === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) throw new SukatApiException('Enter a valid name and email address.', 400);
             if (strlen($password) < 8) throw new SukatApiException('Use a password with at least 8 characters.', 400);
             $id = uuid();
+            $organizationId = activeOrganizationId();
             try {
-                $statement = database()->prepare('INSERT INTO users (id, role, first_name, last_name, email, password_hash, unit_system) VALUES (?, ?, ?, ?, ?, ?, ?)');
-                $statement->execute([$id, 'customer', substr($firstName, 0, 80), substr($lastName, 0, 80), $email, password_hash($password, PASSWORD_DEFAULT), 'cm']);
+                $statement = database()->prepare('INSERT INTO users (id, role, organization_id, first_name, last_name, email, password_hash, unit_system) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+                $statement->execute([$id, 'customer', $organizationId, substr($firstName, 0, 80), substr($lastName, 0, 80), $email, password_hash($password, PASSWORD_DEFAULT), 'cm']);
             } catch (PDOException $error) {
                 if ((string) $error->getCode() === '23000') throw new SukatApiException('An account with that email already exists.', 409);
                 throw $error;
@@ -1043,6 +1070,7 @@ try {
             $id = uuid();
             $statement = database()->prepare('INSERT INTO organizations (id, name, owner_id, settings) VALUES (?, ?, ?, ?)');
             $statement->execute([$id, substr($name, 0, 120), $user['id'], '{}']);
+            ensureActiveOrganizationMarker();
             $statement = database()->prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1');
             $statement->execute([$id]);
             jsonResponse(organizationResponse($statement->fetch()));
