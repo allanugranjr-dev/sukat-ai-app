@@ -2764,3 +2764,247 @@ body {
     padding-bottom: max(40px, env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* Final mobile shell pass: use one predictable drawer instead of a cramped
+   second navigation row, then give the high-use controls the full width. */
+@media (max-width: 700px) {
+  .app-shell {
+    display: block;
+    position: relative;
+  }
+
+  .app-sidebar {
+    background: var(--navy-deep);
+    box-shadow: 18px 0 36px rgba(8, 27, 44, .24);
+    display: flex;
+    flex-basis: auto;
+    flex-direction: column;
+    height: 100dvh;
+    left: 0;
+    min-height: 100dvh;
+    overflow-y: auto;
+    padding: max(24px, env(safe-area-inset-top, 0px)) 16px max(20px, env(safe-area-inset-bottom, 0px));
+    position: fixed;
+    top: 0;
+    transform: translate3d(-105%, 0, 0);
+    transition: transform .2s var(--ease-out);
+    width: min(320px, 88vw);
+    z-index: 30;
+  }
+
+  .app-sidebar.mobile-open {
+    transform: translate3d(0, 0, 0);
+  }
+
+  .sidebar-scrim {
+    background: rgba(7, 22, 35, .52);
+    display: block;
+    inset: 0;
+    position: fixed;
+    z-index: 29;
+  }
+
+  .sidebar-brand {
+    align-items: flex-start;
+    display: flex;
+    min-width: 0;
+    padding: 0 4px;
+  }
+
+  .workspace-label {
+    margin-left: auto;
+    max-width: 150px;
+    text-align: right;
+  }
+
+  .side-nav {
+    display: grid;
+    gap: 6px;
+    margin-top: 30px;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .side-nav-item {
+    flex: none;
+    font-size: 17px;
+    min-height: 52px;
+    padding: 0 15px;
+    width: 100%;
+  }
+
+  .side-nav-item span:not(.nav-count) {
+    display: inline;
+  }
+
+  .side-nav-item svg {
+    height: 20px;
+    width: 20px;
+  }
+
+  .side-nav-more-menu {
+    margin-top: 5px;
+    padding: 5px;
+  }
+
+  .side-nav-more-menu .side-nav-item {
+    font-size: 16px;
+    min-height: 48px;
+  }
+
+  .sidebar-bottom {
+    display: block;
+    margin-top: auto;
+  }
+
+  .app-topbar {
+    min-height: 68px;
+  }
+
+  .mobile-menu {
+    flex: 0 0 48px;
+  }
+
+  .topbar-actions {
+    gap: 4px;
+  }
+
+  .topbar-profile {
+    border-left: 0;
+    padding-left: 4px;
+  }
+
+  .notification-popover {
+    left: 12px;
+    max-height: min(70dvh, 420px);
+    right: 12px;
+    top: calc(68px + env(safe-area-inset-top, 0px));
+    width: auto;
+  }
+
+  .section-header > .button,
+  .section-header > .back-workroom,
+  .capture-next > .button,
+  .simple-form > .button,
+  .invite-form-panel form > .button,
+  .profile-fields > .button {
+    align-self: stretch;
+    width: 100%;
+  }
+
+  .capture-actions {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: 1fr;
+  }
+
+  .capture-actions .button {
+    width: 100%;
+  }
+
+  .model-3d-controls {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .model-3d-controls button {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .results-actions > div:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .result-buttons {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .result-buttons .button {
+    width: 100%;
+  }
+
+  .profile-identity .button {
+    margin-left: 0;
+    margin-top: 10px;
+    width: 100%;
+  }
+
+  .invitation-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .invitation-row > div {
+    min-width: min(0, 100%);
+  }
+
+  .invitation-remove {
+    flex: 1 0 100%;
+    width: 100%;
+  }
+
+  .review-switcher {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+
+  .review-switcher-item {
+    flex: 0 0 min(260px, 78vw);
+  }
+
+  .provider-row {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .provider-row > span {
+    min-width: 0;
+  }
+
+  .schedule-item {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .schedule-item > strong {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .schedule-item .button {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .workspace-content {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .panel,
+  .consent-card,
+  .capture-stage-card,
+  .capture-next,
+  .results-viewer,
+  .results-panel,
+  .results-actions,
+  .invitation-list,
+  .invite-form-panel {
+    padding-left: 15px;
+    padding-right: 15px;
+  }
+
+  .model-3d-controls {
+    grid-template-columns: 1fr;
+  }
+}
