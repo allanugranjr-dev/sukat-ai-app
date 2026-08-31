@@ -7,6 +7,14 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: "https",
   },
+  plugins: {
+    SystemBars: {
+      insetsHandling: "css",
+      style: "LIGHT",
+      hidden: false,
+      animation: "NONE",
+    },
+  },
   android: {
     buildOptions: {
       releaseType: "APK",

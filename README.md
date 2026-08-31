@@ -215,6 +215,17 @@ The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 The Android package id is `com.sukatai.app`. Before distributing it publicly, configure a release signing key, verify Supabase redirect URLs for the hosted app, deploy the required Edge Functions, and test camera permissions on a real device.
 
+## iOS mobile app
+
+The same Capacitor web app is also prepared for iOS with bundle id `com.sukatai.app`, light system bars, safe-area-aware layout, and camera/photo-library usage descriptions in `ios/App/App/Info.plist`. iOS packaging and signing require macOS with Xcode.
+
+```bash
+npm run mobile:sync:ios
+npm run mobile:open:ios
+```
+
+Run those commands on macOS, select an Apple development team in Xcode, and test the camera permission flow on a physical iPhone. The Windows checkout can typecheck and generate the iOS project, but cannot build or sign an iOS app without Xcode.
+
 ## Useful commands
 
 ```bash

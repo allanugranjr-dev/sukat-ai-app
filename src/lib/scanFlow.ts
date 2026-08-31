@@ -37,6 +37,7 @@ export function previousScanPosition(step: ScanStep, captureIndex: number): {
   }
   if (step === "capture") return { step: "height", captureIndex: 0 };
   if (step === "height") return { step: "prep", captureIndex: 0 };
+  if (step === "results") return { step: "capture", captureIndex: 2 };
   if (step === "processing") return { step: "capture", captureIndex: 2 };
   return { step, captureIndex };
 }
@@ -48,6 +49,7 @@ export function validateUpload(file: { type: string; size: number } | null): {
   if (!file) return { valid: false, message: "Choose an image first." };
   const supported = ["image/jpeg", "image/png", "image/webp"];
   if (!supported.includes(file.type.trim().toLowerCase())) return { valid: false, message: "Use a JPG, PNG, or WebP image." };
+  if (file.size <= 0) return { valid: false, message: "The selected image is empty. Choose another image." };
   if (file.size > 10 * 1024 * 1024) return { valid: false, message: "Images must be 10 MB or smaller." };
   return { valid: true, message: "Image is ready to upload." };
 }

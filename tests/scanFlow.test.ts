@@ -7,6 +7,7 @@ describe("scan flow guardrails", () => {
     expect(previousScanPosition("capture", 2)).toEqual({ step: "capture", captureIndex: 1 });
     expect(previousScanPosition("capture", 0)).toEqual({ step: "height", captureIndex: 0 });
     expect(previousScanPosition("height", 0)).toEqual({ step: "prep", captureIndex: 0 });
+    expect(previousScanPosition("results", 0)).toEqual({ step: "capture", captureIndex: 2 });
   });
 
   it("validates a calibrated height without body judgments", () => {
@@ -19,6 +20,7 @@ describe("scan flow guardrails", () => {
   it("only accepts supported, reasonably sized uploads", () => {
     expect(validateUpload({ type: "image/jpeg", size: 1024 }).valid).toBe(true);
     expect(validateUpload({ type: "IMAGE/PNG", size: 10 * 1024 * 1024 }).valid).toBe(true);
+    expect(validateUpload({ type: "image/jpeg", size: 0 }).valid).toBe(false);
     expect(validateUpload({ type: "image/gif", size: 1024 }).valid).toBe(false);
     expect(validateUpload({ type: "image/png", size: 11 * 1024 * 1024 }).valid).toBe(false);
   });

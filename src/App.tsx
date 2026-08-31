@@ -332,7 +332,7 @@ function TrustPoint({ icon, title, copy }: { icon: IconName; title: string; copy
   return <div className="trust-point"><span className="trust-icon"><Icon name={icon} size={18} /></span><div><strong>{title}</strong><p>{copy}</p></div></div>;
 }
 
-function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification }: { mode: AuthMode; notice: string; onBack: () => void; onModeChange: (mode: AuthMode) => void; onNotice: (notice: string) => void; onVerification: (email: string) => void }) {
+function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification, showBack = mode !== "signin" }: { mode: AuthMode; notice: string; onBack: () => void; onModeChange: (mode: AuthMode) => void; onNotice: (notice: string) => void; onVerification: (email: string) => void; showBack?: boolean }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -344,6 +344,7 @@ function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (window.matchMedia("(pointer: coarse)").matches) return undefined;
     const frame = window.requestAnimationFrame(() => {
       const selector = mode === "signup" ? 'input[name="first_name"]' : 'input[type="email"]';
       document.querySelector<HTMLInputElement>(selector)?.focus();
@@ -382,16 +383,50 @@ function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification
     }
   };
 
-  const heading = mode === "forgot" ? "Reset your password" : mode === "signin" ? "Sign in to SukatAI" : "Create your account";
-  return <div className="auth-page"><section className="auth-story"><button type="button" className="auth-back" onClick={onBack}><Icon name="arrow-left" size={16} /> Back to home</button><div className="auth-story-inner"><Logo inverse /><p className="eyebrow">MEASURE WITH INTENTION</p><h1>Good clothes begin with <em>good information.</em></h1><p>One secure workspace for guided capture, professional review, and the next fitting.</p><div className="story-list"><span><Icon name="scan" size={18} /> Guided, camera-optional capture</span><span><Icon name="dress" size={18} /> Measurements a dressmaker can check</span><span><Icon name="lock" size={18} /> Private by design</span></div></div><span className="story-footer">SukatAI · secure measurement workspace</span></section><section className="auth-form-panel"><div className="auth-form-wrap"><div className="auth-topline"><span>{mode === "signin" ? "New to SukatAI?" : mode === "forgot" ? "Remember your password?" : "Already have an account?"}</span><button type="button" className="text-button" onClick={() => onModeChange(mode === "signin" ? "signup" : "signin")}>{mode === "signin" ? "Create account" : "Sign in"} <Icon name="arrow-right" size={15} /></button></div><div className="auth-heading"><p className="eyebrow">{mode === "forgot" ? "ACCOUNT RECOVERY" : mode === "signin" ? "WELCOME BACK" : "YOUR BETTER FIT STARTS HERE"}</p><h2>{heading}</h2><p>{mode === "forgot" ? "We will email a secure link to reset your password." : mode === "signin" ? "Continue to your measurement workroom." : "Save your scans, review results, and share only when you are ready."}</p></div><form className="auth-form" onSubmit={submit}>{mode === "signup" && <div className="form-row"><Field label="First name" value={firstName} onChange={setFirstName} placeholder="First name" /><Field label="Last name" value={lastName} onChange={setLastName} placeholder="Last name" /></div>}<Field label="Email address" value={email} onChange={setEmail} placeholder="name@domain.com" type="email" autoComplete="email" />{mode !== "forgot" && <div className="field"><label htmlFor="auth-password">Password</label><div className="input-with-action"><input id="auth-password" name="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" type={showPassword ? "text" : "password"} autoComplete={mode === "signin" ? "current-password" : "new-password"} /><button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword((value) => !value)}><Icon name="eye" size={18} /></button></div></div>}{mode === "signup" && <Field label="Confirm password" value={confirm} onChange={setConfirm} placeholder="Repeat your password" type="password" autoComplete="new-password" />}{mode === "signin" && <div className="form-meta"><span /> <button type="button" className="text-button" onClick={() => onModeChange("forgot")}>Forgot password?</button></div>}{mode === "signup" && <label className="consent-label"><input name="privacy-consent" type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>I agree to the privacy notice and understand that measurements are estimates requiring professional review.</span></label>}{notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}{error && <InlineError message={error} />}<Button type="submit" className="auth-submit" icon={busy ? undefined : "arrow-right"} disabled={busy}>{busy ? "Working…" : mode === "forgot" ? "Send reset link" : mode === "signin" ? "Sign in" : "Create account"}</Button></form><p className="auth-note"><Icon name="shield" size={15} /> Dressmaker accounts require an administrator invitation.</p></div></section></div>;
+  const heading = mode === "forgot" ? "Reset your password" : mode === "signin" ? "Sign in" : "Create your account";
+  return <main className="auth-page auth-page-direct">
+    <section className="auth-form-panel" aria-labelledby="auth-title">
+      <div className="auth-form-wrap">
+        <div className="auth-direct-header"><Logo /></div>
+
+        {showBack && <button type="button" className="auth-back auth-back-direct" onClick={onBack}><Icon name="arrow-left" size={16} /> Back</button>}
+
+        <div className="auth-heading">
+          <h1 id="auth-title">{heading}</h1>
+          {mode === "forgot" && <p>We will email a secure link to reset your password.</p>}
+          {mode === "signin" && <p>Use your SukatAI account to continue.</p>}
+          {mode === "signup" && <p>Create a private account for your measurement workroom.</p>}
+        </div>
+
+        <form className="auth-form" onSubmit={submit}>
+          {mode === "signup" && <div className="form-row"><Field label="First name" value={firstName} onChange={setFirstName} placeholder="First name" /><Field label="Last name" value={lastName} onChange={setLastName} placeholder="Last name" /></div>}
+          <Field label="Email address" value={email} onChange={setEmail} placeholder={mode === "signup" ? "name@domain.com" : "Email address"} type="email" autoComplete="email" icon={mode === "signin" || mode === "forgot" ? "mail" : undefined} />
+          {mode !== "forgot" && <div className="field"><label htmlFor="auth-password">Password</label><div className="input-with-action auth-password-input"><Icon name="lock" size={22} /><input id="auth-password" name="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === "signin" ? "Password" : "At least 8 characters"} type={showPassword ? "text" : "password"} autoComplete={mode === "signin" ? "current-password" : "new-password"} /><button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword((value) => !value)}><Icon name="eye" size={22} /></button></div></div>}
+          {mode === "signup" && <Field label="Confirm password" value={confirm} onChange={setConfirm} placeholder="Repeat your password" type="password" autoComplete="new-password" />}
+          {mode === "signin" && <div className="form-meta"><span /> <button type="button" className="text-button" onClick={() => onModeChange("forgot")}>Forgot password?</button></div>}
+          {mode === "signup" && <label className="consent-label"><input name="privacy-consent" type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>I agree to the privacy notice and understand that measurements are estimates requiring professional review.</span></label>}
+          {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}
+          {error && <InlineError message={error} />}
+          <Button type="submit" className="auth-submit" icon={busy ? undefined : "arrow-right"} disabled={busy}>{busy ? "Working…" : mode === "forgot" ? "Send reset link" : mode === "signin" ? "Sign in" : "Create account"}</Button>
+        </form>
+
+        <div className="auth-divider" aria-hidden="true"><span>or</span></div>
+        <div className="auth-switch-card">
+          {mode === "forgot" ? <><span>Remember your password?</span><button type="button" onClick={() => onModeChange("signin")}>Sign in</button></> : mode === "signin" ? <><span>New to SukatAI?</span><button type="button" onClick={() => onModeChange("signup")}>Create an account</button></> : <><span>Already have an account?</span><button type="button" onClick={() => onModeChange("signin")}>Sign in</button></>}
+        </div>
+        <button type="button" className="auth-help-bottom" onClick={() => onNotice("For help, contact your administrator.")}>Need help?</button>
+      </div>
+    </section>
+  </main>;
 }
 
-function Field({ label, value, onChange, placeholder, type = "text", autoComplete, id, name, required = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; autoComplete?: string; id?: string; name?: string; required?: boolean }) {
+function Field({ label, value, onChange, placeholder, type = "text", autoComplete, id, name, required = false, icon }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; autoComplete?: string; id?: string; name?: string; required?: boolean; icon?: IconName }) {
   const generatedId = useId();
   const inputId = id ?? `field-${generatedId.replaceAll(":", "")}`;
   const generatedName = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   const inputName = name ?? (generatedName || inputId);
-  return <div className="field"><label htmlFor={inputId}>{label}{required && <span aria-hidden="true"> *</span>}</label><input id={inputId} name={inputName} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} type={type} autoComplete={autoComplete} spellCheck={type === "email" ? false : undefined} required={required} /></div>;
+  const input = <input id={inputId} name={inputName} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} type={type} autoComplete={autoComplete} spellCheck={type === "email" ? false : undefined} required={required} />;
+  return <div className="field"><label htmlFor={inputId}>{label}{required && <span aria-hidden="true"> *</span>}</label>{icon ? <div className="field-input-with-icon"><Icon name={icon} size={22} />{input}</div> : input}</div>;
 }
 
 export default function App() {
@@ -404,7 +439,7 @@ function ConfiguredApp() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileError, setProfileError] = useState("");
-  const [publicView, setPublicView] = useState<AuthMode>("landing");
+  const [publicView, setPublicView] = useState<AuthMode>("signin");
   const [notice, setNotice] = useState("");
   const [verificationEmail, setVerificationEmail] = useState("");
   const [invitationAuthOpen, setInvitationAuthOpen] = useState(false);
@@ -482,13 +517,65 @@ function ConfiguredApp() {
     clearSpecialUrl();
   };
 
+  useEffect(() => {
+    const handleNativeBack = (event: Event) => {
+      if (event.defaultPrevented) return;
+      if (invitationFlowRequested && session) {
+        finishInvitationFlow();
+        event.preventDefault();
+        return;
+      }
+      if (resetRequested && session) {
+        clearSpecialUrl();
+        void signOut();
+        event.preventDefault();
+        return;
+      }
+      if (verificationRequested || verificationEmail) {
+        clearSpecialUrl();
+        setVerificationEmail("");
+        setPublicView("signin");
+        event.preventDefault();
+        return;
+      }
+      if (invitationFlowRequested && !session) {
+        if (invitationAuthOpen) {
+          setInvitationAuthOpen(false);
+        } else {
+          finishInvitationFlow();
+          setPublicView("signin");
+        }
+        event.preventDefault();
+        return;
+      }
+      if (!session && publicView !== "landing" && publicView !== "signin") {
+        setNotice("");
+        setPublicView("signin");
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener("sukatai:native-back", handleNativeBack);
+    return () => window.removeEventListener("sukatai:native-back", handleNativeBack);
+  }, [
+    clearSpecialUrl,
+    finishInvitationFlow,
+    invitationAuthOpen,
+    invitationFlowRequested,
+    publicView,
+    resetRequested,
+    session,
+    verificationEmail,
+    verificationRequested,
+  ]);
+
   if (loading) return <FullPageLoading />;
   if (invitationFlowRequested && session) return <InvitationAcceptPage token={inviteToken} session={session} profile={profile} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onAccepted={async () => { await refreshProfile(); finishInvitationFlow(); }} />;
   if (resetRequested && session) return <PasswordResetPage onComplete={() => { clearSpecialUrl(); void signOut(); }} />;
   if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} verified={Boolean(session?.user.email_confirmed_at) && !verificationError} initialError={verificationError} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setPublicView("signin"); }} onContinue={() => { clearSpecialUrl(); setVerificationEmail(""); }} />;
-  if (invitationFlowRequested && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
+  if (invitationFlowRequested && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} showBack onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
   if (invitationFlowRequested && !session) return <InvitationWelcomePage session={null} expired={expiredInvitationCallback} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
-  if (!session) return publicView === "landing" ? <LandingPage onAuth={(view) => { setNotice(""); setPublicView(view); }} /> : <AuthPage mode={publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("landing"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
+  if (!session) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("signin"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
   if (!profile || !isRole(profile.role)) return <ProfileUnavailable message={profileError || "Your authenticated account does not have a valid SukatAI profile."} onSignOut={() => void signOut()} />;
   return <Workspace profile={profile} onProfileChange={setProfile} onSignOut={() => void signOut()} />;
 }
@@ -633,14 +720,14 @@ const navByRole: Record<Role, Array<{ key: Page; label: string; icon: IconName }
     { key: "overview", label: "Overview", icon: "grid" },
     { key: "scan", label: "Start a scan", icon: "scan" },
     { key: "measurements", label: "My measurements", icon: "ruler" },
-    { key: "orders", label: "My orders", icon: "bag" },
+    { key: "orders", label: "Orders", icon: "bag" },
     { key: "fittings", label: "Fittings", icon: "calendar" },
     { key: "profile", label: "Profile", icon: "user" },
   ],
   dressmaker: [
     { key: "dashboard", label: "Dashboard", icon: "grid" },
-    { key: "customers", label: "Customers", icon: "users" },
     { key: "reviews", label: "Measurement reviews", icon: "ruler" },
+    { key: "customers", label: "Customers", icon: "users" },
     { key: "orders", label: "Orders", icon: "bag" },
     { key: "fittings", label: "Fittings", icon: "calendar" },
     { key: "profile", label: "Profile", icon: "user" },
@@ -664,8 +751,31 @@ const primaryNavByRole: Record<Role, Page[]> = {
 
 function Workspace({ profile, onProfileChange, onSignOut }: { profile: Profile; onProfileChange: (profile: Profile) => void; onSignOut: () => void }) {
   const firstPage = profile.role === "customer" ? "overview" : "dashboard";
-  const [page, setPage] = useState<Page>(firstPage);
-  const navigate = (next: string) => setPage(next as Page);
+  const allowedPages = new Set(navByRole[profile.role].map((item) => item.key));
+  const initialPage = (() => {
+    const historyPage = window.history.state?.sukataiWorkspacePage;
+    return typeof historyPage === "string" && allowedPages.has(historyPage as Page) ? historyPage as Page : firstPage as Page;
+  })();
+  const [page, setPage] = useState<Page>(initialPage);
+  const pageRef = useRef<Page>(initialPage);
+  useEffect(() => {
+    window.history.replaceState({ ...window.history.state, sukataiWorkspace: true, sukataiWorkspacePage: pageRef.current }, "", window.location.href);
+    const handlePopState = (event: PopStateEvent) => {
+      const historyPage = event.state?.sukataiWorkspacePage;
+      const nextPage = typeof historyPage === "string" && allowedPages.has(historyPage as Page) ? historyPage as Page : firstPage as Page;
+      pageRef.current = nextPage;
+      setPage(nextPage);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [firstPage, profile.role]);
+  const navigate = (next: string) => {
+    if (!allowedPages.has(next as Page) || pageRef.current === next) return;
+    const nextPage = next as Page;
+    pageRef.current = nextPage;
+    window.history.pushState({ ...window.history.state, sukataiWorkspace: true, sukataiWorkspacePage: nextPage }, "", window.location.href);
+    setPage(nextPage);
+  };
   let content: ReactNode;
   if (profile.role === "customer") {
     content = page === "scan" ? <CustomerScan profile={profile} onNavigate={navigate} /> : page === "measurements" ? <CustomerMeasurements profile={profile} onNavigate={navigate} /> : page === "orders" ? <CustomerOrders profile={profile} /> : page === "fittings" ? <CustomerFittings profile={profile} /> : page === "profile" ? <ProfilePage profile={profile} onProfileChange={onProfileChange} /> : <CustomerDashboard profile={profile} onNavigate={navigate} />;
@@ -737,7 +847,38 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
     return () => { document.body.style.overflow = previousOverflow; };
   }, [mobileOpen]);
 
-  return <div className="app-shell">
+  useEffect(() => {
+    const handleNativeBack = (event: Event) => {
+      if (event.defaultPrevented) return;
+      if (notificationsOpen) {
+        setNotificationsOpen(false);
+        event.preventDefault();
+        return;
+      }
+      if (moreOpen) {
+        setMoreOpen(false);
+        event.preventDefault();
+        return;
+      }
+      if (mobileOpen) {
+        setMobileOpen(false);
+        event.preventDefault();
+        return;
+      }
+      if (page === "scan") return;
+      const firstPage = profile.role === "customer" ? "overview" : "dashboard";
+      if (page !== firstPage) {
+        onNavigate(firstPage);
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener("sukatai:native-back", handleNativeBack);
+    return () => window.removeEventListener("sukatai:native-back", handleNativeBack);
+  }, [mobileOpen, moreOpen, notificationsOpen, onNavigate, page, profile.role]);
+
+  const mobileLabel = (item: { key: Page; label: string }) => item.key === "overview" ? "Home" : item.key === "scan" ? "Scan" : item.key === "measurements" ? "Measurements" : item.key === "reviews" ? "Reviews" : item.key === "orders" ? "Orders" : item.key === "dashboard" ? "Dashboard" : item.label;
+  return <div className="app-shell" data-role={profile.role}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside id="workspace-navigation" aria-label={workspaceLabel} className={cn("app-sidebar", mobileOpen && "mobile-open")}>
       <div className="sidebar-brand"><Logo compact inverse /><span className="workspace-label">{workspaceLabel}</span></div>
@@ -754,6 +895,7 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
     <div className="app-main">
       <header className="app-topbar">
         <button ref={mobileMenuRef} type="button" className="mobile-menu" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={() => setMobileOpen((value) => !value)}><Icon name="menu" size={21} /></button>
+        <div className="mobile-topbar-brand"><Logo compact /></div>
         <div className="topbar-context"><span className="eyebrow">{workspaceLabel}</span><strong>{profile.organization_id ? "Your organization is connected" : profile.role === "customer" ? "Your private account" : "Ask an administrator to assign your organization"}</strong></div>
         <div className="topbar-actions">
           <div ref={notificationWrapRef} className="notification-wrap">
@@ -764,6 +906,9 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
         </div>
       </header>
       <main id="main-content" className="workspace-content" tabIndex={-1}>{children}</main>
+      <nav className="mobile-bottom-nav" aria-label={`${workspaceLabel} quick navigation`}>
+        {primaryItems.map((item) => <button type="button" key={item.key} aria-current={page === item.key ? "page" : undefined} className={cn(page === item.key && "active")} onClick={() => go(item.key)}><Icon name={item.icon} size={23} /><span>{mobileLabel(item)}</span></button>)}
+      </nav>
     </div>
   </div>;
 }
@@ -809,9 +954,10 @@ function CustomerDashboard({ profile, onNavigate }: { profile: Profile; onNaviga
   const orders = ordersState.data ?? [];
   const activeScan = scans.find((scan) => !["verified", "failed"].includes(scan.status));
   const verifiedScans = scans.filter((scan) => scan.status === "verified");
+  const latestScan = activeScan ?? verifiedScans[0];
   const loading = scansState.loading || ordersState.loading;
   const error = scansState.error || ordersState.error;
-  return <div className="page-stack"><SectionHeader eyebrow={`CUSTOMER WORKROOM · ${formatDate(new Date())}`} title={`Good morning, ${profile.first_name}.`} description="Keep your measurements clear, private, and ready for your next step." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a scan</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { scansState.reload(); ordersState.reload(); }} /> : <><section className="welcome-banner"><div><Badge tone={verifiedScans.length > 0 ? "success" : "teal"} dot>{verifiedScans.length > 0 ? "MEASUREMENTS READY" : "ACCOUNT READY"}</Badge><h2>{verifiedScans.length > 0 ? "Your checked measurements are ready." : "Start with a clearer fit record."}</h2><p>{activeScan ? `Your current scan is ${scanStatusLabel(activeScan.status).toLowerCase()}.` : "Create a guided scan when you are ready. Results appear after the service checks your photos."}</p><div className="welcome-actions"><Button onClick={() => onNavigate(activeScan ? "scan" : "scan")} icon="scan">{activeScan ? "Continue scan" : "Start a scan"}</Button>{verifiedScans.length > 0 && <Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Start an order</Button>}</div></div><div className="welcome-orbit"><div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" /><span><Icon name="ruler" size={27} /></span></div></section><div className="stats-grid four-stats"><StatCard icon="scan" label="Scans" value={String(scans.length)} detail={activeScan ? scanStatusLabel(activeScan.status) : "No active scan"} onClick={() => onNavigate("scan")} /><StatCard icon="ruler" label="Checked sets" value={String(verifiedScans.length)} detail={verifiedScans.length ? "Ready to share" : "Not available yet"} onClick={() => onNavigate("measurements")} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail={orders.length ? "From your account" : "No orders yet"} onClick={() => onNavigate("orders")} /><StatCard icon="calendar" label="Fittings" value="—" detail="No fitting requests" onClick={() => onNavigate("fittings")} /></div><div className="dashboard-grid"><Panel className="latest-measurement"><div className="panel-heading"><div><p className="eyebrow">LATEST ACTIVITY</p><h2>{activeScan ? "Current scan" : "No measurements yet"}</h2></div>{activeScan && <StatusBadge status={activeScan.status} />}</div>{activeScan ? <div className="status-card"><span className="status-card-icon"><Icon name="scan" size={22} /></span><div><strong>Scan created {formatDate(activeScan.created_at)}</strong><p>{activeScan.status === "processing_queued" || activeScan.status === "processing" ? "Your uploaded views are waiting while the service checks them." : "Continue the guided flow to add or review your views."}</p></div><Button variant="ghost" onClick={() => onNavigate("scan")} icon="arrow-right">Open scan</Button></div> : <DataState icon="ruler" title="No measurements yet" body="Start a scan to create your first private measurement record." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} />}</Panel><Panel className="scan-prompt"><p className="eyebrow">HOW IT WORKS</p><h2>A guided path from capture to review.</h2><div className="mini-steps"><span><i>01</i><b>Capture</b><small>Front, side, back</small></span><span><i>02</i><b>Check</b><small>Measurements</small></span><span><i>03</i><b>Review</b><small>Dressmaker check</small></span></div><button type="button" className="text-button" onClick={() => onNavigate("scan")}>Open photo guide <Icon name="arrow-right" size={15} /></button></Panel></div></>}</div>;
+  return <div className="page-stack"><SectionHeader eyebrow={`CUSTOMER WORKROOM · ${formatDate(new Date())}`} title="Your measurements" description="Start a scan or open your latest measurement record." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a scan</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { scansState.reload(); ordersState.reload(); }} /> : <><section className="welcome-banner"><div><Badge tone={verifiedScans.length > 0 ? "success" : "teal"} dot>{verifiedScans.length > 0 ? "MEASUREMENTS READY" : "ACCOUNT READY"}</Badge><h2>{verifiedScans.length > 0 ? "Your checked measurements are ready." : "Start a clearer scan."}</h2><p>{activeScan ? `Your current scan is ${scanStatusLabel(activeScan.status).toLowerCase()}.` : "Create a guided scan when you are ready. Results appear after the service checks your photos."}</p><div className="welcome-actions"><Button onClick={() => onNavigate("scan")} icon="scan">{activeScan ? "Continue scan" : "Start a scan"}</Button>{verifiedScans.length > 0 && <Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Start an order</Button>}</div></div><div className="welcome-orbit"><div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" /><span><Icon name="ruler" size={27} /></span></div></section><div className="stats-grid four-stats"><StatCard icon="scan" label="Scans" value={String(scans.length)} detail={activeScan ? scanStatusLabel(activeScan.status) : latestScan ? "Ready to review" : "No active scan"} onClick={() => onNavigate("scan")} /><StatCard icon="ruler" label="Checked sets" value={String(verifiedScans.length)} detail={verifiedScans.length ? "Ready to share" : "Not available yet"} onClick={() => onNavigate("measurements")} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail={orders.length ? "From your account" : "No orders yet"} onClick={() => onNavigate("orders")} /><StatCard icon="calendar" label="Fittings" value="—" detail="No fitting requests" onClick={() => onNavigate("fittings")} /></div><div className="dashboard-grid"><Panel className="latest-measurement"><div className="panel-heading"><div><p className="eyebrow">LATEST ACTIVITY</p><h2>{latestScan ? latestScan.status === "verified" ? "Latest measurement" : "Current scan" : "No measurements yet"}</h2></div>{latestScan && <StatusBadge status={latestScan.status} />}</div>{latestScan ? <div className="status-card"><span className="status-card-icon"><Icon name={latestScan.status === "verified" ? "ruler" : "scan"} size={22} /></span><div><strong>{latestScan.status === "verified" ? `Measurements checked ${formatDate(latestScan.updated_at)}` : `Scan created ${formatDate(latestScan.created_at)}`}</strong><p>{latestScan.status === "verified" ? "Your checked measurement set is ready to review or share with your dressmaker." : latestScan.status === "processing_queued" || latestScan.status === "processing" ? "Your uploaded views are waiting while the service checks them." : "Continue the guided flow to add or review your views."}</p></div><Button variant="ghost" onClick={() => onNavigate(latestScan.status === "verified" ? "measurements" : "scan")} icon="arrow-right">{latestScan.status === "verified" ? "Open measurements" : "Open scan"}</Button></div> : <DataState icon="ruler" title="No measurements yet" body="Start a scan to create your first private measurement record." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} />}</Panel><Panel className="scan-prompt"><p className="eyebrow">HOW IT WORKS</p><h2>A guided path from capture to review.</h2><div className="mini-steps"><span><i>01</i><b>Capture</b><small>Front, side, back</small></span><span><i>02</i><b>Check</b><small>Measurements</small></span><span><i>03</i><b>Review</b><small>Dressmaker check</small></span></div><button type="button" className="text-button" onClick={() => onNavigate("scan")}>Open photo guide <Icon name="arrow-right" size={15} /></button></Panel></div></>}</div>;
 }
 
 function StatCard({ icon, label, value, detail, onClick }: { icon: IconName; label: string; value: string; detail: string; onClick?: () => void }) {
@@ -888,6 +1034,23 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
     if (!cameraOn && videoRef.current) videoRef.current.srcObject = null;
   }, [cameraOn]);
 
+  useEffect(() => {
+    const stopCameraForLifecycle = () => {
+      if (!streamRef.current) return;
+      releaseCamera();
+      setCameraOn(false);
+    };
+    const stopWhenHidden = () => {
+      if (document.hidden) stopCameraForLifecycle();
+    };
+    document.addEventListener("visibilitychange", stopWhenHidden);
+    window.addEventListener("pagehide", stopCameraForLifecycle);
+    return () => {
+      document.removeEventListener("visibilitychange", stopWhenHidden);
+      window.removeEventListener("pagehide", stopCameraForLifecycle);
+    };
+  }, []);
+
   function releaseCamera() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
@@ -931,11 +1094,14 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
     if (!validation.valid) { setError(validation.message); return; }
     const slot = captures[captureIndex];
     if (!slot) return;
+    const previousAsset = slot.asset;
     setUploading(true);
     setError("");
     try {
-      if (slot.asset) await deleteScanAsset(slot.asset);
       const asset = await uploadScanAsset({ scanId, customerId: profile.id, organizationId: profile.organization_id, assetType: slot.key, file });
+      if (previousAsset) {
+        try { await deleteScanAsset(previousAsset); } catch { /* Keep the new capture even if cleanup of the previous asset is delayed. */ }
+      }
       const updated = await updateScan(scanId, { status: "uploaded", capture_source: source });
       setScan(updated);
       setCaptures((current) => current.map((item, index) => index === captureIndex ? { ...item, captured: true, asset } : item));
@@ -962,7 +1128,20 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
       releaseCamera();
       streamRef.current = stream;
       setCameraOn(true);
-    } catch (reason: unknown) { if (mountedRef.current) setError(readableError(reason)); }
+    } catch (reason: unknown) {
+      if (!mountedRef.current) return;
+      const cameraErrorName = typeof DOMException !== "undefined" && reason instanceof DOMException ? reason.name : "";
+      const cameraMessage = cameraErrorName === "NotAllowedError" || cameraErrorName === "PermissionDeniedError"
+        ? "Camera access was denied. Allow camera access in your device settings, or use Upload image instead."
+        : cameraErrorName === "NotFoundError"
+          ? "No camera was found on this device. Use Upload image instead."
+          : cameraErrorName === "NotReadableError" || cameraErrorName === "AbortError"
+            ? "The camera is busy or unavailable. Close other camera apps and try again, or use Upload image instead."
+            : cameraErrorName === "SecurityError"
+              ? "Camera access is unavailable in this context. Use Upload image instead."
+              : readableError(reason);
+      setError(cameraMessage);
+    }
   };
 
   const captureCameraFrame = async () => {
@@ -999,6 +1178,27 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
     setError("");
   };
 
+  useEffect(() => {
+    const handleNativeBack = (event: Event) => {
+      if (event.defaultPrevented) return;
+      if (cameraOn) {
+        stopCamera();
+        event.preventDefault();
+        return;
+      }
+      if (step !== "prep") {
+        goBack();
+        event.preventDefault();
+        return;
+      }
+      onNavigate("overview");
+      event.preventDefault();
+    };
+
+    window.addEventListener("sukatai:native-back", handleNativeBack);
+    return () => window.removeEventListener("sukatai:native-back", handleNativeBack);
+  }, [cameraOn, captureIndex, onNavigate, step]);
+
   if (hydrating) return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Start a new scan" description="Loading any unfinished scan securely…" /><LoadingState /></div>;
   return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Start a new scan" description="Three guided views, a private upload, and a reviewable result." action={step !== "prep" ? <Button variant="ghost" icon="arrow-left" onClick={goBack}>Back</Button> : <Button variant="secondary" icon="x" onClick={() => onNavigate("overview")}>Exit scan</Button>} /><ScanProgress step={step} />{error && <InlineError message={error} />}{notice && <div className="form-notice scan-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}{step === "prep" && <ScanPreparation prep={prep} consent={consent} setPrep={setPrep} setConsent={setConsent} onContinue={continueFromPrep} busy={busy} />}{step === "height" && <ScanHeight height={height} unit={unit} unknownHeight={unknownHeight} setHeight={setHeight} setUnit={setUnit} setUnknownHeight={setUnknownHeight} onContinue={continueFromHeight} busy={busy} />}{step === "capture" && <ScanCapture captures={captures} captureIndex={captureIndex} setCaptureIndex={setCaptureIndex} cameraOn={cameraOn} videoRef={videoRef} uploading={uploading} onStartCamera={() => void startCamera()} onStopCamera={stopCamera} onCapture={() => void captureCameraFrame()} onChooseFile={(event) => void chooseFile(event)} onRemove={async (index) => { const asset = captures[index]?.asset; if (!asset) return; try { await deleteScanAsset(asset); setCaptures((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, captured: false, asset: undefined } : item)); setNotice(`${captures[index].label} view removed.`); } catch (reason: unknown) { setError(readableError(reason)); } }} onContinue={() => void completeCapture()} busy={busy} />}{step === "processing" && scanId && <ScanProcessing scanId={scanId} initialMessage={processingNotice} onBack={() => { setStep("capture"); setCaptureIndex(2); }} onResults={() => setStep("results")} />}{step === "results" && scanId && <ScanResults scanId={scanId} onRecapture={() => { setStep("capture"); setCaptureIndex(0); }} onDashboard={() => onNavigate("overview")} />}</div>;
 }
@@ -1017,7 +1217,7 @@ function ScanCapture({ captures, captureIndex, setCaptureIndex, cameraOn, videoR
   const current = captures[captureIndex] ?? captures[0];
   const currentUrl = current?.asset?.signedUrl;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  return <div className="capture-layout"><Panel className="capture-stage-card"><div className="capture-stage-heading"><div><p className="eyebrow">STEP 03 · PHOTOS</p><h2>{current?.label ?? "Front"} view</h2><p>Keep your whole body in frame. You can replace any photo before submitting.</p></div><Badge tone={current?.captured ? "success" : "teal"} dot>{current?.captured ? "UPLOADED" : "READY"}</Badge></div><p className="sr-only" role="status" aria-live="polite">Viewing {current?.label ?? "Front"} view. {current?.captured ? "This view is uploaded." : "This view is ready for capture."}</p><div className={cn("capture-stage", currentUrl && "has-capture")} role="region" aria-label={`${current?.label ?? "Front"} camera capture area`}>{cameraOn && <video ref={videoRef} autoPlay muted playsInline className="capture-video" aria-label="Live camera preview" />}{!cameraOn && currentUrl && <img className="capture-preview" src={currentUrl} alt={`${current?.label} scan view`} />}{!cameraOn && !currentUrl && <div className="capture-empty"><span><Icon name="camera" size={31} /></span><strong>Camera or upload</strong><small>Your selected view will appear here after a successful upload.</small></div>}{cameraOn && <div className="capture-guide" aria-hidden="true"><span /><span /><span /></div>}</div><div className="capture-controls"><div className="capture-progress"><p className="eyebrow">VIEWS</p><div>{captures.map((slot, index) => <button key={slot.key} type="button" className={cn(index === captureIndex && "current", slot.captured && "done")} aria-current={index === captureIndex ? "step" : undefined} aria-label={`${slot.label} view${slot.captured ? ", uploaded" : ""}`} onClick={() => setCaptureIndex(index)}><i>{slot.captured ? <Icon name="check" size={12} /> : index + 1}</i><small>{slot.label}</small></button>)}</div></div><div className="capture-actions">{cameraOn ? <><Button variant="secondary" onClick={onStopCamera} icon="x">Stop camera</Button><Button onClick={onCapture} disabled={uploading} icon="camera">{uploading ? "Uploading…" : "Capture frame"}</Button></> : <><input ref={fileInputRef} className="sr-only" type="file" aria-label={"Upload " + (current?.label ?? "current") + " scan photo"} accept="image/jpeg,image/png,image/webp" capture="environment" onChange={onChooseFile} /><Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={uploading} icon="upload">{uploading ? "Uploading…" : "Upload image"}</Button><Button variant="ghost" onClick={onStartCamera} disabled={uploading} icon="camera">Use camera</Button></>}</div></div></Panel><div className="capture-side"><Panel className="capture-next"><p className="eyebrow">NEXT STEP</p><h3>{captures.every((slot) => slot.captured) ? "All three views are ready." : `Add the ${captures.find((slot) => !slot.captured)?.label.toLowerCase() ?? "next"} view.`}</h3><p>{captures.every((slot) => slot.captured) ? "Submit these photos when they look clear. We will check the result before showing measurements." : "Move between Front, Side, and Back to add or replace a photo."}</p><Button onClick={onContinue} disabled={busy || uploading || captures.some((slot) => !slot.captured)} icon="arrow-right">{busy ? "Submitting…" : "Submit photos"}</Button></Panel><Panel className="capture-quality"><p className="eyebrow">PHOTO CHECKLIST</p><div className="quality-list"><span><Icon name="check" size={14} /> JPG, PNG, or WebP</span><span><Icon name="check" size={14} /> Maximum 10 MB each</span><span><Icon name="lock" size={14} /> Stored privately</span></div><div className="uploaded-list">{captures.map((slot, index) => <div key={slot.key}><span className={slot.captured ? "uploaded" : "not-uploaded"}><Icon name={slot.captured ? "check" : "clock"} size={12} /></span><span><strong>{slot.label}</strong><small>{slot.captured ? "Uploaded" : "Waiting"}</small></span>{slot.captured && <button type="button" className="icon-button" aria-label={`Remove ${slot.label} view`} onClick={() => void onRemove(index)}><Icon name="x" size={14} /></button>}</div>)}</div></Panel></div></div>;
+  return <div className="capture-layout"><Panel className="capture-stage-card"><div className="capture-stage-heading"><div><p className="eyebrow">STEP 03 · PHOTOS</p><h2>{current?.label ?? "Front"} view</h2><p>Keep your whole body in frame. You can replace any photo before submitting.</p></div><Badge tone={current?.captured ? "success" : "teal"} dot>{current?.captured ? "UPLOADED" : "READY"}</Badge></div><p className="sr-only" role="status" aria-live="polite">Viewing {current?.label ?? "Front"} view. {current?.captured ? "This view is uploaded." : "This view is ready for capture."}</p><div className={cn("capture-stage", currentUrl && "has-capture")} role="region" aria-label={`${current?.label ?? "Front"} camera capture area`}>{cameraOn && <video ref={videoRef} autoPlay muted playsInline className="capture-video" aria-label="Live camera preview" />}{!cameraOn && currentUrl && <img className="capture-preview" src={currentUrl} alt={`${current?.label} scan view`} />}{!cameraOn && !currentUrl && <div className="capture-empty"><span><Icon name="camera" size={31} /></span><strong>Camera or upload</strong><small>Your selected view will appear here after a successful upload.</small></div>}{cameraOn && <div className="capture-guide" aria-hidden="true"><span /><span /><span /></div>}</div><div className="capture-controls"><div className="capture-progress"><p className="eyebrow">VIEWS</p><div>{captures.map((slot, index) => <button key={slot.key} type="button" className={cn(index === captureIndex && "current", slot.captured && "done")} aria-current={index === captureIndex ? "step" : undefined} aria-label={`${slot.label} view${slot.captured ? ", uploaded" : ""}`} onClick={() => setCaptureIndex(index)}><i>{slot.captured ? <Icon name="check" size={12} /> : index + 1}</i><small>{slot.label}</small></button>)}</div></div><div className="capture-actions">{cameraOn ? <><Button variant="secondary" onClick={onStopCamera} icon="x">Stop camera</Button><Button onClick={onCapture} disabled={uploading} icon="camera">{uploading ? "Uploading…" : "Capture frame"}</Button></> : <><input ref={fileInputRef} className="sr-only" type="file" aria-label={"Upload " + (current?.label ?? "current") + " scan photo"} accept="image/jpeg,image/png,image/webp" onChange={onChooseFile} /><Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={uploading} icon="upload">{uploading ? "Uploading…" : "Upload image"}</Button><Button variant="ghost" onClick={onStartCamera} disabled={uploading} icon="camera">Use camera</Button></>}</div></div></Panel><div className="capture-side"><Panel className="capture-next"><p className="eyebrow">NEXT STEP</p><h3>{captures.every((slot) => slot.captured) ? "All three views are ready." : `Add the ${captures.find((slot) => !slot.captured)?.label.toLowerCase() ?? "next"} view.`}</h3><p>{captures.every((slot) => slot.captured) ? "Submit these photos when they look clear. We will check the result before showing measurements." : "Move between Front, Side, and Back to add or replace a photo."}</p><Button onClick={onContinue} disabled={busy || uploading || captures.some((slot) => !slot.captured)} icon="arrow-right">{busy ? "Submitting…" : "Submit photos"}</Button></Panel><Panel className="capture-quality"><p className="eyebrow">PHOTO CHECKLIST</p><div className="quality-list"><span><Icon name="check" size={14} /> JPG, PNG, or WebP</span><span><Icon name="check" size={14} /> Maximum 10 MB each</span><span><Icon name="lock" size={14} /> Stored privately</span></div><div className="uploaded-list">{captures.map((slot, index) => <div key={slot.key}><span className={slot.captured ? "uploaded" : "not-uploaded"}><Icon name={slot.captured ? "check" : "clock"} size={12} /></span><span><strong>{slot.label}</strong><small>{slot.captured ? "Uploaded" : "Waiting"}</small></span>{slot.captured && <button type="button" className="icon-button" aria-label={`Remove ${slot.label} view`} onClick={() => void onRemove(index)}><Icon name="x" size={14} /></button>}</div>)}</div></Panel></div></div>;
 }
 
 function ScanProcessing({ scanId, initialMessage, onBack, onResults }: { scanId: string; initialMessage: string; onBack: () => void; onResults: () => void }) {
@@ -1998,8 +2198,12 @@ function ModelViewer({ model, measurements = [], heightValue = null, heightUnit 
 
 function CustomerMeasurements({ profile, onNavigate }: { profile: Profile; onNavigate: (page: string) => void }) {
   const state = useAsyncData(() => listCustomerMeasurementSets(profile.id), [profile.id], []);
-  const sets = (state.data ?? []).filter((bundle) => bundle.measurements.length > 0);
-  return <div className="page-stack"><SectionHeader eyebrow="CUSTOMER WORKROOM · MEASUREMENTS" title="My measurements" description="Provider values and tailor adjustments stay attached to their scan." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a new scan</Button>} />{state.loading ? <LoadingState /> : state.error ? <ErrorState message={state.error} onRetry={state.reload} /> : sets.length === 0 ? <Panel><DataState icon="ruler" title="No measurements yet" body="Complete a scan and wait for a valid provider result before measurement values appear here." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} /></Panel> : <div className="measurement-history-list">{sets.map((bundle) => <Panel className="history-panel" key={bundle.scan.id}><div className="panel-heading"><div><p className="eyebrow">SCAN {bundle.scan.id.slice(0, 8).toUpperCase()}</p><h2>{formatDate(bundle.scan.updated_at)}</h2></div><StatusBadge status={bundle.scan.status} /></div><div className="history-meta"><span><strong>{bundle.measurements.length}</strong> measurements</span><span><strong>{bundle.bodyModel ? "Model available" : "No model"}</strong></span><span>Updated {formatDateTime(bundle.scan.updated_at)}</span></div><MeasurementTable measurements={bundle.measurements} /></Panel>)}</div>}</div>;
+  const sets = state.data ?? [];
+  const actionFor = (bundle: ScanBundle) => {
+    if (["draft", "uploaded", "needs_recapture"].includes(bundle.scan.status)) return <Button variant="secondary" onClick={() => onNavigate("scan")} icon="scan">Continue scan</Button>;
+    return undefined;
+  };
+  return <div className="page-stack"><SectionHeader eyebrow="CUSTOMER WORKROOM · MEASUREMENTS" title="My measurements" description="Provider values and tailor adjustments stay attached to their scan." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a new scan</Button>} />{state.loading ? <LoadingState /> : state.error ? <ErrorState message={state.error} onRetry={state.reload} /> : sets.length === 0 ? <Panel><DataState icon="ruler" title="No measurements yet" body="Complete a scan and wait for a valid provider result before measurement values appear here." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} /></Panel> : <div className="measurement-history-list">{sets.map((bundle) => <Panel className="history-panel" key={bundle.scan.id}><div className="panel-heading"><div><p className="eyebrow">SCAN {bundle.scan.id.slice(0, 8).toUpperCase()}</p><h2>{formatDate(bundle.scan.updated_at)}</h2></div><StatusBadge status={bundle.scan.status} /></div><div className="history-meta"><span><strong>{bundle.measurements.length}</strong> measurements</span><span><strong>{bundle.bodyModel ? "Model available" : "No model"}</strong></span><span>Updated {formatDateTime(bundle.scan.updated_at)}</span></div>{bundle.measurements.length > 0 ? <MeasurementTable measurements={bundle.measurements} /> : <DataState icon={bundle.scan.status === "failed" ? "info" : "scan"} title={bundle.scan.status === "failed" ? "Scan needs attention" : `${scanStatusLabel(bundle.scan.status)} scan`} body={bundle.scan.status === "needs_recapture" ? "Add new photos to create a clearer measurement result." : "Your measurement values will appear here after processing returns a valid result."} action={actionFor(bundle)} />}</Panel>)}</div>}</div>;
 }
 
 function CustomerOrders({ profile }: { profile: Profile }) {
@@ -2067,7 +2271,7 @@ function DressmakerDashboard({ profile, onNavigate }: { profile: Profile; onNavi
   const queue = scans.filter((scan) => scan.status === "ready_for_review" || scan.status === "needs_recapture");
   const loading = customersState.loading || scansState.loading || ordersState.loading;
   const error = customersState.error || scansState.error || ordersState.error;
-  return <div className="page-stack"><SectionHeader eyebrow={`DRESSMAKER WORKROOM · ${formatDate(new Date())}`} title={`Welcome, ${profile.first_name}.`} description="Review assigned customer scans and keep production work visible." action={<Button variant="secondary" icon="users" onClick={() => onNavigate("customers")}>View customers</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { customersState.reload(); scansState.reload(); ordersState.reload(); }} /> : <><div className="stats-grid four-stats"><StatCard icon="users" label="Customers" value={String(customers.length)} detail="Assigned to your organization" /><StatCard icon="ruler" label="Review queue" value={String(queue.length)} detail={queue.length ? "Needs attention" : "Nothing waiting"} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail="Organization orders" /><StatCard icon="calendar" label="Fittings" value="—" detail="Open the fittings page" /></div><div className="dashboard-grid"><Panel className="review-queue"><div className="panel-heading"><div><p className="eyebrow">MEASUREMENT REVIEWS</p><h2>{queue.length ? `${queue.length} scan${queue.length === 1 ? "" : "s"} waiting` : "Review queue is clear"}</h2></div><Badge tone={queue.length ? "warning" : "success"} dot>{queue.length ? "ACTION NEEDED" : "UP TO DATE"}</Badge></div>{queue.length === 0 ? <DataState icon="ruler" title="No scans ready for review" body="When a customer shares a provider result with your organization, it will appear here." /> : <div className="queue-list">{queue.slice(0, 5).map((scan) => <button type="button" className="queue-row" key={scan.id} onClick={() => onNavigate("reviews")}><span className="queue-icon"><Icon name="ruler" size={17} /></span><span><strong>Scan {scan.id.slice(0, 8)}</strong><small>Updated {formatDateTime(scan.updated_at)}</small></span><StatusBadge status={scan.status} /><Icon name="arrow-right" size={15} /></button>)}</div>}<button type="button" className="text-button" onClick={() => onNavigate("reviews")}>Open review queue <Icon name="arrow-right" size={15} /></button></Panel><Panel className="production-overview"><div className="panel-heading"><div><p className="eyebrow">WORKROOM STATUS</p><h2>Data at a glance</h2></div><Icon name="chart" size={20} /></div><div className="status-list"><span><i className="status-dot teal" /><b>Provider results</b><strong>{scans.filter((scan) => scan.status === "ready_for_review" || scan.status === "verified").length}</strong></span><span><i className="status-dot gold" /><b>Processing</b><strong>{scans.filter((scan) => scan.status === "processing" || scan.status === "processing_queued").length}</strong></span><span><i className="status-dot gray" /><b>Needs recapture</b><strong>{scans.filter((scan) => scan.status === "needs_recapture").length}</strong></span></div><Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Open orders</Button></Panel></div></>}</div>;
+  return <div className="page-stack"><SectionHeader eyebrow={`DRESSMAKER WORKROOM · ${formatDate(new Date())}`} title="Tailor workspace" description="Review measurements and keep orders moving." action={<Button variant="secondary" icon="users" onClick={() => onNavigate("customers")}>View customers</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { customersState.reload(); scansState.reload(); ordersState.reload(); }} /> : <><div className="stats-grid four-stats"><StatCard icon="users" label="Customers" value={String(customers.length)} detail="Assigned to your organization" /><StatCard icon="ruler" label="Review queue" value={String(queue.length)} detail={queue.length ? "Needs attention" : "Nothing waiting"} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail="Organization orders" /><StatCard icon="calendar" label="Fittings" value="—" detail="Open the fittings page" /></div><div className="dashboard-grid"><Panel className="review-queue"><div className="panel-heading"><div><p className="eyebrow">MEASUREMENT REVIEWS</p><h2>{queue.length ? `${queue.length} scan${queue.length === 1 ? "" : "s"} waiting` : "Review queue is clear"}</h2></div><Badge tone={queue.length ? "warning" : "success"} dot>{queue.length ? "ACTION NEEDED" : "UP TO DATE"}</Badge></div>{queue.length === 0 ? <DataState icon="ruler" title="No scans ready for review" body="When a customer shares a provider result with your organization, it will appear here." /> : <div className="queue-list">{queue.slice(0, 5).map((scan) => <button type="button" className="queue-row" key={scan.id} onClick={() => onNavigate("reviews")}><span className="queue-icon"><Icon name="ruler" size={17} /></span><span><strong>Scan {scan.id.slice(0, 8)}</strong><small>Updated {formatDateTime(scan.updated_at)}</small></span><StatusBadge status={scan.status} /><Icon name="arrow-right" size={15} /></button>)}</div>}<button type="button" className="text-button" onClick={() => onNavigate("reviews")}>Open review queue <Icon name="arrow-right" size={15} /></button></Panel><Panel className="production-overview"><div className="panel-heading"><div><p className="eyebrow">WORKROOM STATUS</p><h2>Data at a glance</h2></div><Icon name="chart" size={20} /></div><div className="status-list"><span><i className="status-dot teal" /><b>Provider results</b><strong>{scans.filter((scan) => scan.status === "ready_for_review" || scan.status === "verified").length}</strong></span><span><i className="status-dot gold" /><b>Processing</b><strong>{scans.filter((scan) => scan.status === "processing" || scan.status === "processing_queued").length}</strong></span><span><i className="status-dot gray" /><b>Needs recapture</b><strong>{scans.filter((scan) => scan.status === "needs_recapture").length}</strong></span></div><Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Open orders</Button></Panel></div></>}</div>;
 }
 
 function DressmakerCustomers({ profile }: { profile: Profile }) {
@@ -2169,11 +2373,11 @@ function loadAdminSnapshot(): Promise<AdminSnapshot> {
 function AdminDashboard() {
   const state = useAsyncData(loadAdminSnapshot, [], null);
   const snapshot = state.data;
-  if (state.loading) return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE" title="Platform overview" description="Live Supabase records across the organizations you administer." /><LoadingState /></div>;
-  if (state.error || !snapshot) return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE" title="Platform overview" description="Live Supabase records across the organizations you administer." /><ErrorState message={state.error || "The administrative snapshot was not returned."} onRetry={state.reload} /></div>;
+  if (state.loading) return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE" title="Admin dashboard" description="Manage users, invitations, and activity." /><LoadingState /></div>;
+  if (state.error || !snapshot) return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE" title="Admin dashboard" description="Manage users, invitations, and activity." /><ErrorState message={state.error || "The administrative snapshot was not returned."} onRetry={state.reload} /></div>;
   const pending = snapshot.scans.filter((scan) => scan.status === "ready_for_review" || scan.status === "needs_recapture");
   const processing = snapshot.scans.filter((scan) => scan.status === "processing" || scan.status === "processing_queued");
-  return <div className="page-stack"><SectionHeader eyebrow={`ADMIN CONSOLE · ${formatDate(new Date())}`} title="Platform overview" description="Monitor real accounts, scans, reviews, and orders using live activity only." action={<Button variant="secondary" icon="refresh" onClick={state.reload}>Refresh data</Button>} /><div className="stats-grid six-stats"><StatCard icon="users" label="Customers" value={String(snapshot.customers.length)} detail="Auth profiles" /><StatCard icon="dress" label="Dressmakers" value={String(snapshot.dressmakers.length)} detail="Invited accounts" /><StatCard icon="scan" label="Scans" value={String(snapshot.scans.length)} detail="All statuses" /><StatCard icon="ruler" label="Review queue" value={String(pending.length)} detail="Needs staff action" /><StatCard icon="bag" label="Orders" value={String(snapshot.orders.length)} detail="All organizations" /><StatCard icon="mail" label="Invitations" value={String(snapshot.invitations.length)} detail="Invitation records" /></div><div className="admin-chart-grid"><Panel className="activity-chart"><div className="panel-heading"><div><p className="eyebrow">SCAN PIPELINE</p><h2>Current statuses</h2></div><Icon name="chart" size={20} /></div>{snapshot.scans.length === 0 ? <DataState icon="scan" title="No scan activity yet" body="Live scan statuses will appear here once customers create and upload scans." /> : <div className="admin-status-grid">{(["draft", "uploaded", "processing_queued", "processing", "ready_for_review", "verified", "needs_recapture", "failed"] as ScanStatus[]).map((status) => <div key={status}><span>{scanStatusLabel(status)}</span><strong>{snapshot.scans.filter((scan) => scan.status === status).length}</strong><i style={{ width: `${snapshot.scans.length ? Math.max(2, snapshot.scans.filter((scan) => scan.status === status).length / snapshot.scans.length * 100) : 2}%` }} /></div>)}</div>}</Panel><Panel className="status-chart"><div className="panel-heading"><div><p className="eyebrow">PROCESSING</p><h2>Provider queue</h2></div><Badge tone={processing.length ? "warning" : "success"} dot>{processing.length ? "IN PROGRESS" : "CLEAR"}</Badge></div><div className="admin-queue-number"><strong>{processing.length}</strong><span>scan{processing.length === 1 ? "" : "s"} waiting for a provider state</span></div><p className="muted-copy">Results are counted only when the processing service writes a validated measurement set.</p></Panel></div><div className="admin-lower-grid"><Panel className="system-activity"><div className="panel-heading"><div><p className="eyebrow">RECENT SCANS</p><h2>Latest records</h2></div></div>{snapshot.scans.length === 0 ? <DataState icon="database" title="No records" body="There are no scan records to display." /> : <div className="system-list">{snapshot.scans.slice(0, 6).map((scan) => <div className="system-row" key={scan.id}><span className="system-icon"><Icon name="scan" size={15} /></span><span><strong>{scan.id.slice(0, 12)}</strong><small>Customer {scan.customer_id.slice(0, 8)}</small></span><StatusBadge status={scan.status} /><small>{formatDate(scan.updated_at)}</small></div>)}</div>}</Panel><Panel className="attention-panel"><div className="panel-heading"><div><p className="eyebrow">ADMIN ACTIONS</p><h2>Needs attention</h2></div></div>{pending.length === 0 ? <DataState icon="check" title="Nothing urgent" body="The current scan review queue is clear." /> : <div className="attention-list">{pending.slice(0, 5).map((scan) => <div className="attention-row" key={scan.id}><span><Icon name="ruler" size={15} /></span><strong>!</strong><small>{scanStatusLabel(scan.status)}<br />Scan {scan.id.slice(0, 8)}</small></div>)}</div>}</Panel></div></div>;
+  return <div className="page-stack"><SectionHeader eyebrow={`ADMIN CONSOLE · ${formatDate(new Date())}`} title="Admin dashboard" description="Manage users, invitations, and activity." action={<Button variant="secondary" icon="refresh" onClick={state.reload}>Refresh data</Button>} /><div className="stats-grid six-stats"><StatCard icon="users" label="Customers" value={String(snapshot.customers.length)} detail="Auth profiles" /><StatCard icon="dress" label="Dressmakers" value={String(snapshot.dressmakers.length)} detail="Invited accounts" /><StatCard icon="scan" label="Scans" value={String(snapshot.scans.length)} detail="All statuses" /><StatCard icon="ruler" label="Review queue" value={String(pending.length)} detail="Needs staff action" /><StatCard icon="bag" label="Orders" value={String(snapshot.orders.length)} detail="All organizations" /><StatCard icon="mail" label="Invitations" value={String(snapshot.invitations.length)} detail="Invitation records" /></div><div className="admin-chart-grid"><Panel className="activity-chart"><div className="panel-heading"><div><p className="eyebrow">SCAN PIPELINE</p><h2>Current statuses</h2></div><Icon name="chart" size={20} /></div>{snapshot.scans.length === 0 ? <DataState icon="scan" title="No scan activity yet" body="Live scan statuses will appear here once customers create and upload scans." /> : <div className="admin-status-grid">{(["draft", "uploaded", "processing_queued", "processing", "ready_for_review", "verified", "needs_recapture", "failed"] as ScanStatus[]).map((status) => <div key={status}><span>{scanStatusLabel(status)}</span><strong>{snapshot.scans.filter((scan) => scan.status === status).length}</strong><i style={{ width: `${snapshot.scans.length ? Math.max(2, snapshot.scans.filter((scan) => scan.status === status).length / snapshot.scans.length * 100) : 2}%` }} /></div>)}</div>}</Panel><Panel className="status-chart"><div className="panel-heading"><div><p className="eyebrow">PROCESSING</p><h2>Provider queue</h2></div><Badge tone={processing.length ? "warning" : "success"} dot>{processing.length ? "IN PROGRESS" : "CLEAR"}</Badge></div><div className="admin-queue-number"><strong>{processing.length}</strong><span>scan{processing.length === 1 ? "" : "s"} waiting for a provider state</span></div><p className="muted-copy">Results are counted only when the processing service writes a validated measurement set.</p></Panel></div><div className="admin-lower-grid"><Panel className="system-activity"><div className="panel-heading"><div><p className="eyebrow">RECENT SCANS</p><h2>Latest records</h2></div></div>{snapshot.scans.length === 0 ? <DataState icon="database" title="No records" body="There are no scan records to display." /> : <div className="system-list">{snapshot.scans.slice(0, 6).map((scan) => <div className="system-row" key={scan.id}><span className="system-icon"><Icon name="scan" size={15} /></span><span><strong>{scan.id.slice(0, 12)}</strong><small>Customer {scan.customer_id.slice(0, 8)}</small></span><StatusBadge status={scan.status} /><small>{formatDate(scan.updated_at)}</small></div>)}</div>}</Panel><Panel className="attention-panel"><div className="panel-heading"><div><p className="eyebrow">ADMIN ACTIONS</p><h2>Needs attention</h2></div></div>{pending.length === 0 ? <DataState icon="check" title="Nothing urgent" body="The current scan review queue is clear." /> : <div className="attention-list">{pending.slice(0, 5).map((scan) => <div className="attention-row" key={scan.id}><span><Icon name="ruler" size={15} /></span><strong>!</strong><small>{scanStatusLabel(scan.status)}<br />Scan {scan.id.slice(0, 8)}</small></div>)}</div>}</Panel></div></div>;
 }
 
 function AdminCustomers() {
@@ -2301,7 +2505,7 @@ function AdminReports() {
   if (state.error || !snapshot) return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE · REPORTS" title="Reports" description="Aggregate live records without making up activity." /><ErrorState message={state.error || "The report data was not returned."} onRetry={state.reload} /></div>;
   const statuses = (["draft", "uploaded", "processing_queued", "processing", "ready_for_review", "verified", "needs_recapture", "failed"] as ScanStatus[]).map((status) => ({ status, count: snapshot.scans.filter((scan) => scan.status === status).length }));
   const orderStatuses = (["new", "accepted", "in_production", "for_fitting", "ready_for_pickup", "completed", "cancelled"] as Order["status"][]).map((status) => ({ status, count: snapshot.orders.filter((order) => order.status === status).length }));
-  return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE · REPORTS" title="Reports" description="Use current Supabase records to understand pipeline health." action={<Button variant="secondary" icon="refresh" onClick={state.reload}>Refresh</Button>} /><div className="reports-grid"><Panel className="category-chart"><div className="panel-heading"><div><p className="eyebrow">SCAN STATUSES</p><h2>Measurement pipeline</h2></div><Icon name="scan" size={20} /></div>{snapshot.scans.length === 0 ? <DataState icon="scan" title="No scan data" body="Status reporting begins when customers create scans." /> : <div className="report-bars">{statuses.map((item) => <div className="report-bar-row" key={item.status}><span>{scanStatusLabel(item.status)}</span><strong>{item.count}</strong><i><b style={{ width: `${Math.max(item.count ? 7 : 2, item.count / snapshot.scans.length * 100)}%` }} /></i></div>)}</div>}</Panel><Panel className="confidence-chart"><div className="panel-heading"><div><p className="eyebrow">ORDER STATUSES</p><h2>Production pipeline</h2></div><Icon name="bag" size={20} /></div>{snapshot.orders.length === 0 ? <DataState icon="bag" title="No order data" body="Order reporting begins after a customer creates a request." /> : <div className="report-bars">{orderStatuses.map((item) => <div className="report-bar-row" key={item.status}><span>{orderStatusLabel(item.status)}</span><strong>{item.count}</strong><i><b style={{ width: `${Math.max(item.count ? 7 : 2, item.count / snapshot.orders.length * 100)}%` }} /></i></div>)}</div>}</Panel><Panel className="performance-table"><div className="panel-heading"><div><p className="eyebrow">ACCOUNT COVERAGE</p><h2>Current totals</h2></div><Badge tone="neutral">Calculated from live rows</Badge></div><div className="performance-grid"><span>Metric</span><span>Count</span><span>Latest created</span><span>Access</span><strong>Customers</strong><strong>{snapshot.customers.length}</strong><span>{formatDate(snapshot.customers.at(-1)?.created_at)}</span><span>Admin query</span><strong>Dressmakers</strong><strong>{snapshot.dressmakers.length}</strong><span>{formatDate(snapshot.dressmakers.at(-1)?.created_at)}</span><span>Admin query</span><strong>Invitations</strong><strong>{snapshot.invitations.length}</strong><span>{formatDate(snapshot.invitations.at(-1)?.created_at)}</span><span>Admin query</span></div></Panel></div></div>;
+  return <div className="page-stack"><SectionHeader eyebrow="ADMIN CONSOLE · REPORTS" title="Reports" description="Use current Supabase records to understand pipeline health." action={<Button variant="secondary" icon="refresh" onClick={state.reload}>Refresh</Button>} /><div className="reports-grid"><Panel className="category-chart"><div className="panel-heading"><div><p className="eyebrow">SCAN STATUSES</p><h2>Measurement pipeline</h2></div><Icon name="scan" size={20} /></div>{snapshot.scans.length === 0 ? <DataState icon="scan" title="No scan data" body="Status reporting begins when customers create scans." /> : <div className="report-bars">{statuses.map((item) => <div className="report-bar-row" key={item.status}><span>{scanStatusLabel(item.status)}</span><strong>{item.count}</strong><i><b style={{ width: `${Math.max(item.count ? 7 : 2, item.count / snapshot.scans.length * 100)}%` }} /></i></div>)}</div>}</Panel><Panel className="confidence-chart"><div className="panel-heading"><div><p className="eyebrow">ORDER STATUSES</p><h2>Production pipeline</h2></div><Icon name="bag" size={20} /></div>{snapshot.orders.length === 0 ? <DataState icon="bag" title="No order data" body="Order reporting begins after a customer creates a request." /> : <div className="report-bars">{orderStatuses.map((item) => <div className="report-bar-row" key={item.status}><span>{orderStatusLabel(item.status)}</span><strong>{item.count}</strong><i><b style={{ width: `${Math.max(item.count ? 7 : 2, item.count / snapshot.orders.length * 100)}%` }} /></i></div>)}</div>}</Panel><Panel className="performance-table"><div className="panel-heading"><div><p className="eyebrow">ACCOUNT COVERAGE</p><h2>Current totals</h2></div><Badge tone="neutral">Calculated from live rows</Badge></div><div className="performance-grid"><span>Metric</span><span>Count</span><span>Latest created</span><span>Access</span><strong>Customers</strong><strong>{snapshot.customers.length}</strong><span>{formatDate(snapshot.customers.at(-1)?.created_at)}</span><span>Admin query</span><strong>Dressmakers</strong><strong>{snapshot.dressmakers.length}</strong><span>{formatDate(snapshot.dressmakers.at(-1)?.created_at)}</span><span>Admin query</span><strong>Invitations</strong><strong>{snapshot.invitations.length}</strong><span>{formatDate(snapshot.invitations.at(-1)?.created_at)}</span><span>Admin query</span></div><div className="report-metric-cards" aria-label="Account coverage summary"><article><span><Icon name="users" size={18} /></span><strong>Customers</strong><b>{snapshot.customers.length}</b><small>Latest {formatDate(snapshot.customers.at(-1)?.created_at)}</small></article><article><span><Icon name="dress" size={18} /></span><strong>Dressmakers</strong><b>{snapshot.dressmakers.length}</b><small>Latest {formatDate(snapshot.dressmakers.at(-1)?.created_at)}</small></article><article><span><Icon name="mail" size={18} /></span><strong>Invitations</strong><b>{snapshot.invitations.length}</b><small>Latest {formatDate(snapshot.invitations.at(-1)?.created_at)}</small></article></div></Panel></div></div>;
 }
 
 function AdminSettings({ profile }: { profile: Profile }) {
