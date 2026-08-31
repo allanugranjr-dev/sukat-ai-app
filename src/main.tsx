@@ -9,8 +9,8 @@ function redirectLegacyLocalInvitation(): boolean {
   const isLocalHost = /^(localhost|127\.0\.0\.1)$/i.test(current.hostname);
   const authHash = new URLSearchParams(current.hash.replace(/^#/, ""));
   const isExpiredEmailCallback = authHash.get("error_code") === "otp_expired" && authHash.get("error") === "access_denied";
-  const isInvitation = current.searchParams.has("invite") || current.searchParams.has("token") || authHash.get("type") === "invite" || isExpiredEmailCallback;
-  if (!isLocalHost || !isInvitation) return false;
+  const isAuthCallback = current.searchParams.has("invite") || current.searchParams.has("token") || authHash.get("type") === "invite" || authHash.get("type") === "recovery" || isExpiredEmailCallback;
+  if (!isLocalHost || !isAuthCallback) return false;
 
   const destination = new URL(`${current.pathname}${current.search}${current.hash}`, invitationAppOrigin());
   if (destination.origin === current.origin) return false;

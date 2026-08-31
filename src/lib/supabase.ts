@@ -4,6 +4,7 @@ const url = (import.meta.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
 const anonKey = (import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
 const configuredBackendMode = (import.meta.env.VITE_BACKEND_MODE ?? "").trim().toLowerCase();
 const backendMode = configuredBackendMode || (import.meta.env.MODE === "node" ? "node" : "");
+const canonicalAppOrigin = "https://sukat-ai-app.vercel.app";
 
 export const isXamppMode = backendMode === "xampp";
 export const isNodeMode = backendMode === "node";
@@ -44,8 +45,12 @@ export function publicAppOrigin(): string {
       // Fall back to the current origin when a deployment variable is malformed.
     }
   }
-  if (window.location.hostname === "sukat-ai-app.vercel.app" || window.location.hostname.endsWith(".vercel.app")) {
-    return "https://sukat-ai-app.vercel.app";
+  if (
+    window.location.hostname === "sukat-ai-app.vercel.app" ||
+    window.location.hostname.endsWith(".vercel.app") ||
+    /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)
+  ) {
+    return canonicalAppOrigin;
   }
   return window.location.origin;
 }
@@ -59,7 +64,7 @@ export function invitationAppOrigin(): string {
       // Fall back to the production alias when a deployment variable is malformed.
     }
   }
-  return "https://sukat-ai-app.vercel.app";
+  return canonicalAppOrigin;
 }
 
 export const supabase: SupabaseClient | null = !isLocalApiMode && supabaseConfig.isConfigured
