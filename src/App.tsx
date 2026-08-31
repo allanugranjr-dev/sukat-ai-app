@@ -791,18 +791,23 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const mobileMenuRef = useRef<HTMLButtonElement | null>(null);
   const notificationWrapRef = useRef<HTMLDivElement | null>(null);
   const notificationButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreWrapRef = useRef<HTMLDivElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const profileWrapRef = useRef<HTMLDivElement | null>(null);
+  const profileButtonRef = useRef<HTMLButtonElement | null>(null);
   const notificationPopoverId = `notifications-${useId().replaceAll(":", "")}`;
   const moreMenuId = `workspace-more-${useId().replaceAll(":", "")}`;
+  const profileMenuId = `profile-menu-${useId().replaceAll(":", "")}`;
   const notificationsState = useAsyncData(() => getNotifications(profile.id), [profile.id], []);
   const notifications = notificationsState.data ?? [];
   const unread = notifications.filter((item) => !item.read_at).length;
   const workspaceLabel = profile.role === "customer" ? "Customer account" : profile.role === "dressmaker" ? "Dressmaker workspace" : "Administrator console";
-  const go = (next: string) => { onNavigate(next); setMobileOpen(false); setMoreOpen(false); setNotificationsOpen(false); };
+  const profileTarget = profile.role === "admin" ? "settings" : "profile";
+  const go = (next: string) => { onNavigate(next); setMobileOpen(false); setMoreOpen(false); setNotificationsOpen(false); setProfileOpen(false); };
   const primaryItems = navByRole[profile.role].filter((item) => primaryNavByRole[profile.role].includes(item.key));
   const secondaryItems = navByRole[profile.role].filter((item) => !primaryNavByRole[profile.role].includes(item.key));
   const readNotification = async (notification: Notification) => {
@@ -810,12 +815,13 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
     try { await markNotificationRead(notification.id); notificationsState.reload(); } catch { /* the list remains visible if the update cannot be completed */ }
   };
   useEffect(() => {
-    if (!mobileOpen && !notificationsOpen && !moreOpen) return undefined;
+    if (!mobileOpen && !notificationsOpen && !moreOpen && !profileOpen) return undefined;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
       if (notificationsOpen && notificationWrapRef.current && !notificationWrapRef.current.contains(target)) setNotificationsOpen(false);
       if (moreOpen && moreWrapRef.current && !moreWrapRef.current.contains(target)) setMoreOpen(false);
+      if (profileOpen && profileWrapRef.current && !profileWrapRef.current.contains(target)) setProfileOpen(false);
     };
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -826,6 +832,10 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
       if (moreOpen) {
         setMoreOpen(false);
         moreTriggerRef.current?.focus();
+      }
+      if (profileOpen) {
+        setProfileOpen(false);
+        profileButtonRef.current?.focus();
       }
       if (mobileOpen) {
         setMobileOpen(false);
@@ -838,7 +848,7 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [mobileOpen, moreOpen, notificationsOpen]);
+  }, [mobileOpen, moreOpen, notificationsOpen, profileOpen]);
 
   useEffect(() => {
     if (!mobileOpen) return undefined;
@@ -860,6 +870,12 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
         event.preventDefault();
         return;
       }
+      if (profileOpen) {
+        setProfileOpen(false);
+        profileButtonRef.current?.focus();
+        event.preventDefault();
+        return;
+      }
       if (mobileOpen) {
         setMobileOpen(false);
         event.preventDefault();
@@ -875,7 +891,7 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
 
     window.addEventListener("sukatai:native-back", handleNativeBack);
     return () => window.removeEventListener("sukatai:native-back", handleNativeBack);
-  }, [mobileOpen, moreOpen, notificationsOpen, onNavigate, page, profile.role]);
+  }, [mobileOpen, moreOpen, notificationsOpen, onNavigate, page, profile.role, profileOpen]);
 
   const mobileLabel = (item: { key: Page; label: string }) => item.key === "overview" ? "Home" : item.key === "scan" ? "Scan" : item.key === "measurements" ? "Measurements" : item.key === "reviews" ? "Reviews" : item.key === "orders" ? "Orders" : item.key === "dashboard" ? "Dashboard" : item.label;
   return <div className="app-shell" data-role={profile.role}>
@@ -902,7 +918,10 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
             <button ref={notificationButtonRef} type="button" className="icon-button notification-button" aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"} aria-expanded={notificationsOpen} aria-controls={notificationPopoverId} onClick={() => { setNotificationsOpen((value) => !value); setMoreOpen(false); }}><Icon name="bell" size={20} />{unread > 0 && <span aria-hidden="true" />}</button>
             {notificationsOpen && <div id={notificationPopoverId} className="notification-popover" role="region" aria-label="Notifications"><div className="popover-heading"><strong>Notifications</strong><button type="button" className="text-button" onClick={() => { setNotificationsOpen(false); notificationButtonRef.current?.focus(); }}>Close</button></div>{notifications.length === 0 ? <p className="popover-empty">No notifications yet.</p> : notifications.map((notification) => <button type="button" key={notification.id} className={cn("notification-item", !notification.read_at && "unread")} aria-label={notification.read_at ? `Read notification: ${notification.title}` : `Mark notification as read: ${notification.title}`} onClick={() => void readNotification(notification)}><strong>{notification.title}</strong><small>{notification.body}</small><em>{formatDateTime(notification.created_at)}</em></button>)}</div>}
           </div>
-          <button type="button" className="topbar-profile" aria-label={`Open ${profile.role === "admin" ? "admin settings" : "profile"}`} onClick={() => go(profile.role === "admin" ? "settings" : "profile")}><Avatar profile={profile} tone={profile.role === "admin" ? "navy" : profile.role === "dressmaker" ? "gold" : "teal"} size="sm" /><span><strong>{displayName(profile)}</strong><small>{profile.email}</small></span><Icon name="chevron" size={15} /></button>
+          <div ref={profileWrapRef} className="profile-menu-wrap">
+            <button ref={profileButtonRef} type="button" className="topbar-profile" aria-label={`Open ${profile.role === "admin" ? "admin settings" : "profile"}`} aria-expanded={profileOpen} aria-controls={profileMenuId} onClick={() => { setProfileOpen((value) => !value); setNotificationsOpen(false); setMoreOpen(false); }}><Avatar profile={profile} tone={profile.role === "admin" ? "navy" : profile.role === "dressmaker" ? "gold" : "teal"} size="sm" /><span><strong>{displayName(profile)}</strong><small>{profile.email}</small></span><Icon name="chevron" size={15} /></button>
+            {profileOpen && <div id={profileMenuId} className="profile-popover" role="menu" aria-label="Profile actions"><div className="profile-popover-heading"><span>Signed in as</span><strong>{displayName(profile)}</strong></div><button type="button" role="menuitem" onClick={() => go(profileTarget)}><Icon name={profile.role === "admin" ? "settings" : "user"} size={17} />{profile.role === "admin" ? "Open settings" : "Open profile"}</button><button type="button" role="menuitem" onClick={() => { setProfileOpen(false); onSignOut(); }}><Icon name="logout" size={17} />Sign out</button></div>}
+          </div>
         </div>
       </header>
       <main id="main-content" className="workspace-content" tabIndex={-1}>{children}</main>
