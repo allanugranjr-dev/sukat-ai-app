@@ -3412,7 +3412,7 @@ body {
   }
 }
 
-/* Paper mobile system: shared by the customer, tailor, and admin workspaces. */
+/* Paper design system: shared by the customer, tailor, and admin workspaces. */
 :root {
   --paper-bg: #f8f9f7;
   --paper-surface: #fffefa;
@@ -4195,6 +4195,270 @@ body {
   .invitation-back-link,
   .auth-help-bottom {
     min-height: 48px;
+  }
+}
+
+/* Keep the browser experience on the same visual system as the phone app. */
+@media (min-width: 701px) {
+  .app-shell,
+  .app-main {
+    background: var(--paper-bg);
+  }
+
+  .app-sidebar {
+    background: var(--paper-ink);
+    border-right: 0;
+  }
+
+  .app-topbar {
+    background: rgba(255, 254, 250, .98);
+    border-bottom-color: var(--paper-line);
+    box-shadow: none;
+  }
+
+  .topbar-search {
+    background: #fff;
+    border-color: var(--paper-line);
+  }
+
+  .topbar-search input,
+  .topbar-profile strong {
+    color: var(--paper-ink);
+  }
+
+  .topbar-profile {
+    border-left-color: var(--paper-line);
+  }
+
+  .topbar-profile small,
+  .topbar-profile > svg {
+    color: var(--paper-muted);
+  }
+
+  .workspace-content {
+    color: var(--paper-ink);
+    max-width: 1440px;
+    padding: 48px clamp(32px, 5vw, 82px) 84px;
+  }
+
+  .section-header h1 {
+    color: var(--paper-ink);
+    font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+    font-size: clamp(48px, 5vw, 72px);
+    font-weight: 700;
+    letter-spacing: -.055em;
+    line-height: .94;
+  }
+
+  .section-header .eyebrow {
+    color: var(--paper-teal);
+    letter-spacing: .12em;
+  }
+
+  .section-header > div > p:not(.eyebrow),
+  .panel-lede,
+  .side-card p,
+  .muted-copy,
+  .results-summary-content > p,
+  .viewer-subtitle,
+  .field-hint {
+    color: var(--paper-muted);
+  }
+
+  .panel,
+  .stat-card,
+  .results-actions {
+    background: var(--paper-surface);
+    border-color: var(--paper-line);
+    border-radius: 18px;
+    box-shadow: 0 1px 0 rgba(16, 42, 76, .03);
+  }
+
+  .panel-heading h2,
+  .new-order-panel h2,
+  .scan-main-card h2,
+  .calibration-copy h2,
+  .capture-stage-heading h2,
+  .processing-copy h2,
+  .results-summary h3,
+  .side-card h3 {
+    color: var(--paper-ink);
+    font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+    font-size: 32px;
+    letter-spacing: -.04em;
+    line-height: .98;
+  }
+
+  .button {
+    border-radius: 12px;
+    min-height: 48px;
+  }
+
+  .button-primary,
+  .button-gold {
+    background: var(--paper-brass);
+    box-shadow: 0 7px 15px rgba(216, 154, 43, .2);
+    color: var(--paper-ink);
+  }
+
+  .button-primary:hover:not(:disabled),
+  .button-gold:hover:not(:disabled) {
+    background: #e4aa3c;
+  }
+
+  .button-secondary {
+    background: var(--paper-surface);
+    border-color: var(--paper-teal);
+    color: var(--paper-teal);
+  }
+
+  .button-ghost,
+  .text-button,
+  .back-workroom {
+    color: var(--paper-teal);
+  }
+
+  .welcome-banner {
+    background: var(--paper-brass);
+    border-color: var(--paper-brass);
+    border-radius: 18px;
+    color: var(--paper-ink);
+  }
+
+  .welcome-banner::before {
+    display: none;
+  }
+
+  .welcome-banner h2,
+  .welcome-banner p {
+    color: var(--paper-ink);
+  }
+
+  .welcome-banner h2 {
+    font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+    font-size: 36px;
+    letter-spacing: -.04em;
+    line-height: .98;
+  }
+
+  .welcome-banner p {
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .welcome-banner .badge {
+    background: rgba(255, 254, 250, .78);
+    border-color: rgba(16, 42, 76, .12);
+    color: var(--paper-ink);
+  }
+
+  .welcome-banner .button-primary {
+    background: var(--paper-ink);
+    box-shadow: none;
+    color: #fffefa;
+  }
+
+  .welcome-banner .button-secondary {
+    border-color: var(--paper-ink);
+    color: var(--paper-ink);
+  }
+
+  .stat-card {
+    min-height: 112px;
+  }
+
+  .stat-icon,
+  .data-state-icon,
+  .side-card-icon,
+  .order-icon,
+  .result-summary-icon,
+  .system-icon {
+    background: #edf5f3;
+    color: var(--paper-teal);
+  }
+
+  .stat-copy strong,
+  .performance-grid > strong,
+  .category-row strong,
+  .report-bar-row strong {
+    color: var(--paper-ink);
+  }
+
+  .stat-copy small,
+  .stat-copy em,
+  .category-row span,
+  .performance-grid > span:not(:nth-child(-n+4)) {
+    color: var(--paper-muted);
+  }
+
+  .directory-head,
+  .performance-grid > span {
+    background: var(--paper-ink);
+  }
+
+  .directory-row,
+  .order-card,
+  .measurement-table tbody tr {
+    background: var(--paper-surface);
+    border-color: var(--paper-line);
+  }
+
+  .directory-row > span:not(.customer-cell),
+  .order-card > span:nth-child(2) small,
+  .report-bar-row span {
+    color: var(--paper-muted);
+  }
+
+  .directory-toolbar h2,
+  .directory-toolbar .panel-heading h2 {
+    color: var(--paper-ink);
+    font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  }
+
+  .inline-search,
+  .field input,
+  .field select,
+  .field textarea,
+  .input-with-action,
+  .input-with-action input,
+  .height-input-wrap > div {
+    background: #fff;
+    border-color: var(--paper-line);
+    color: var(--paper-ink);
+  }
+
+  .inline-search:focus-within,
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus,
+  .input-with-action:focus-within,
+  .height-input-wrap > div:focus-within {
+    border-color: var(--paper-teal);
+    box-shadow: 0 0 0 3px rgba(13, 111, 112, .14);
+  }
+
+  .category-chart,
+  .confidence-chart,
+  .performance-table,
+  .order-list-panel,
+  .directory-panel,
+  .admin-table-panel,
+  .results-viewer,
+  .results-panel,
+  .history-panel,
+  .new-order-panel,
+  .review-preview,
+  .review-editor,
+  .audit-panel {
+    border-color: var(--paper-line);
+  }
+
+  .report-bar-row > i {
+    background: #e7efed;
+  }
+
+  .report-bar-row > i > b {
+    background: var(--paper-teal);
   }
 }
 
