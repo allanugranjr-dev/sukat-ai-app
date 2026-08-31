@@ -36,6 +36,12 @@ export const config = {
   distDirectory: path.join(projectRoot, "dist-node"),
   publicDirectory: path.join(projectRoot, "public"),
   processingDelayMs: numberEnv("SUKATAI_PROCESSING_DELAY_MS", 900),
+  reconstruction: {
+    provider: (process.env.RECONSTRUCTION_PROVIDER ?? "local").trim().toLowerCase() || "local",
+    apiUrl: (process.env.RECONSTRUCTION_API_URL ?? "").trim(),
+    apiKey: (process.env.RECONSTRUCTION_API_KEY ?? "").trim(),
+    timeoutMs: numberEnv("RECONSTRUCTION_TIMEOUT_MS", 120_000),
+  },
   sessionHours: numberEnv("SUKATAI_SESSION_HOURS", 24),
   notifications: {
     emailProvider: (process.env.SUKATAI_EMAIL_PROVIDER ?? (process.env.RESEND_API_KEY ? "resend" : "console")).trim().toLowerCase(),

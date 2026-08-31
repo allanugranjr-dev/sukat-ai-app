@@ -1,9 +1,11 @@
 import { adminClient, AuthRequiredError, requireUser } from "../_shared/auth.ts";
 import { jsonResponse, optionsResponse } from "../_shared/cors.ts";
+import { normalizeLiveMeasurementsResponse } from "../_shared/liveMeasurements.ts";
 
 type ProviderMeasurement = { key?: unknown; value?: unknown; unit?: unknown; confidence?: unknown };
 type ProviderModel = { path?: unknown; url?: unknown; preview_path?: unknown; preview_data?: unknown };
 type ScanForLocalProvider = { height_value: number | null; height_unit: string };
+type ScanAssetForProvider = { asset_type: string; storage_path: string; metadata: unknown };
 
 const localMeasurementTemplate = [
   { key: "ankle_left_circumference", value: 24.3, confidence: 62 },
@@ -63,6 +65,76 @@ function localProviderResult(scan: ScanForLocalProvider): { measurements: Provid
 
 function validMeasurement(value: ProviderMeasurement): value is { key: string; value: number; unit: "cm" | "in"; confidence: number | null } {
   return typeof value.key === "string" && value.key.trim().length > 0 && value.key.trim().length <= 80 && typeof value.value === "number" && Number.isFinite(value.value) && value.value > 0 && (value.unit === "cm" || value.unit === "in") && (value.confidence === undefined || value.confidence === null || (typeof value.confidence === "number" && value.confidence >= 0 && value.confidence <= 100));
+}
+
+function isLiveMeasurementsProvider(provider: string): boolean {
+  return ["live-measurements-api", "live-measurements", "javtahir-live-measurements", "javtahir"].includes(provider.toLowerCase());
+}
+
+function providerTimeoutMs(provider: string): number {
+  const fallback = isLiveMeasurementsProvider(provider) ? 120_000 : 30_000;
+  const configured = Number(Deno.env.get("RECONSTRUCTION_TIMEOUT_MS"));
+  return Number.isFinite(configured) && configured >= 5_000 ? Math.min(configured, 120_000) : fallback;
+}
+
+function heightInCm(scan: ScanForLocalProvider): number | null {
+  const value = Number(scan.height_value);
+  if (scan.height_value === null || scan.height_value === undefined || !Number.isFinite(value) || value <= 0) return null;
+  const centimeters = scan.height_unit === "ftin" ? value * 2.54 : value;
+  return Number.isFinite(centimeters) && centimeters >= 120 && centimeters <= 230 ? centimeters : null;
+}
+
+function imageType(value: unknown): "image/jpeg" | "image/png" | "image/webp" | null {
+  return value === "image/jpeg" || value === "image/png" || value === "image/webp" ? value : null;
+}
+
+function imageExtension(value: string): string {
+  return value === "image/png" ? "png" : value === "image/webp" ? "webp" : "jpg";
+}
+
+function liveMeasurementsEndpoint(providerUrl: string): string {
+  const url = new URL(providerUrl);
+  const pathname = url.pathname.replace(/\/+$/, "");
+  // The upstream README documents /measurements, while its Flask app exposes
+  // /upload_images. Normalize both documented root forms to the live route.
+  if (!pathname || pathname === "/measurements") url.pathname = "/upload_images";
+  return url.toString();
+}
+
+async function fetchLiveImage(client: ReturnType<typeof adminClient>, asset: ScanAssetForProvider, signal: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+  const { data: signed, error: signedError } = await client.storage.from("scan-captures").createSignedUrl(asset.storage_path, 900);
+  if (signedError || !signed?.signedUrl) throw new Error(`Could not authorize the ${asset.asset_type} scan view for processing.`);
+  const response = await fetch(signed.signedUrl, { signal });
+  if (!response.ok) throw new Error(`Could not download the ${asset.asset_type} scan view for processing.`);
+  const metadata = isRecord(asset.metadata) ? asset.metadata : {};
+  const contentType = imageType(metadata.content_type) ?? imageType(response.headers.get("content-type")?.split(";", 1)[0].trim()) ?? "image/jpeg";
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength === 0 || bytes.byteLength > 10 * 1024 * 1024) throw new Error(`The ${asset.asset_type} scan view is outside the supported size range.`);
+  return { blob: new Blob([bytes], { type: contentType }), filename: `${asset.asset_type}.${imageExtension(contentType)}` };
+}
+
+async function callLiveMeasurementsProvider(client: ReturnType<typeof adminClient>, providerUrl: string, providerKey: string, scan: ScanForLocalProvider, assets: ScanAssetForProvider[], signal: AbortSignal) {
+  const heightCm = heightInCm(scan);
+  if (heightCm === null) throw new Error("Enter a valid height before processing this scan. The live measurement provider needs it for scale calibration.");
+  const front = assets.find((asset) => asset.asset_type === "front");
+  const side = assets.find((asset) => asset.asset_type === "side");
+  if (!front || !side) throw new Error("Front and side views are required by the live measurement provider.");
+  const [frontImage, sideImage] = await Promise.all([
+    fetchLiveImage(client, front, signal),
+    fetchLiveImage(client, side, signal),
+  ]);
+  const form = new FormData();
+  form.append("front", frontImage.blob, frontImage.filename);
+  form.append("left_side", sideImage.blob, sideImage.filename);
+  form.append("height_cm", heightCm.toFixed(2));
+  const response = await fetch(liveMeasurementsEndpoint(providerUrl), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${providerKey}` },
+    body: form,
+    signal,
+  });
+  if (!response.ok) throw new Error(`Live measurement provider returned HTTP ${response.status}.`);
+  return normalizeLiveMeasurementsResponse(await response.json() as unknown);
 }
 
 Deno.serve(async (request) => {
@@ -141,36 +213,46 @@ Deno.serve(async (request) => {
     if (localMode) {
       result = localProviderResult(scan);
     } else {
-      const providerAssets = await Promise.all((assets ?? []).map(async (asset) => {
-        const { data: signed, error: signedError } = await client.storage.from("scan-captures").createSignedUrl(asset.storage_path, 900);
-        if (signedError || !signed?.signedUrl) throw new Error(`Could not authorize the ${asset.asset_type} scan view for processing.`);
-        return { asset_type: asset.asset_type, url: signed.signedUrl, metadata: asset.metadata };
-      }));
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30_000);
-      let providerResponse: Response;
+      const timeoutMs = providerTimeoutMs(provider);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        providerResponse = await fetch(providerUrl!, {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${providerKey!}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ scan_id: scanId, height_value: scan.height_value, height_unit: scan.height_unit, assets: providerAssets }),
-          signal: controller.signal,
-        });
+        if (isLiveMeasurementsProvider(provider)) {
+          result = await callLiveMeasurementsProvider(client, providerUrl!, providerKey!, scan, (assets ?? []) as ScanAssetForProvider[], controller.signal);
+        } else {
+          const providerAssets = await Promise.all((assets ?? []).map(async (asset) => {
+            const { data: signed, error: signedError } = await client.storage.from("scan-captures").createSignedUrl(asset.storage_path, 900);
+            if (signedError || !signed?.signedUrl) throw new Error(`Could not authorize the ${asset.asset_type} scan view for processing.`);
+            return { asset_type: asset.asset_type, url: signed.signedUrl, metadata: asset.metadata };
+          }));
+          const providerResponse = await fetch(providerUrl!, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${providerKey!}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ scan_id: scanId, height_value: scan.height_value, height_unit: scan.height_unit, assets: providerAssets }),
+            signal: controller.signal,
+          });
+          if (!providerResponse.ok) throw new Error(`Provider returned HTTP ${providerResponse.status}.`);
+          const decoded = await providerResponse.json() as unknown;
+          if (!isRecord(decoded)) throw new Error("Provider response was not a JSON object.");
+          result = decoded as { measurements?: ProviderMeasurement[]; body_model?: ProviderModel; processing_version?: string };
+        }
       } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") throw new Error("The reconstruction provider timed out after 30 seconds.");
+        if (error instanceof Error && error.name === "AbortError") throw new Error(`The reconstruction provider timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`);
         throw error;
       } finally {
         clearTimeout(timeout);
       }
-      if (!providerResponse.ok) throw new Error(`Provider returned HTTP ${providerResponse.status}.`);
-       const decoded = await providerResponse.json() as unknown;
-       if (!isRecord(decoded)) throw new Error("Provider response was not a JSON object.");
-       result = decoded as { measurements?: ProviderMeasurement[]; body_model?: ProviderModel; processing_version?: string };
     }
     const measurements = Array.isArray(result.measurements) ? result.measurements : [];
     if (measurements.length === 0 || !measurements.every(validMeasurement)) throw new Error("Provider response did not contain a valid measurement set.");
     const normalizedMeasurements = measurements.map((measurement) => ({ scan_id: scanId, key: measurement.key.trim(), value: measurement.value, ai_value: measurement.value, unit: measurement.unit, confidence: measurement.confidence ?? null }));
     if (new Set(normalizedMeasurements.map((measurement) => measurement.key.toLowerCase())).size !== normalizedMeasurements.length) throw new Error("Provider response contained duplicate measurement keys.");
+    if (!localMode) {
+      // A provider retry replaces the complete result; never mix a shorter
+      // Python result with measurements left by the local demo or prior run.
+      const { error: staleMeasurementError } = await client.from("measurements").delete().eq("scan_id", scanId);
+      if (staleMeasurementError) throw staleMeasurementError;
+    }
     const { error: measurementError } = await client.from("measurements").upsert(normalizedMeasurements, { onConflict: "scan_id,key" });
     if (measurementError) throw measurementError;
     const modelPath = result.body_model && (typeof result.body_model.path === "string" ? result.body_model.path : typeof result.body_model.url === "string" ? result.body_model.url : null);
@@ -182,6 +264,10 @@ Deno.serve(async (request) => {
           : {};
       const { error: modelError } = await client.from("body_models").upsert({ scan_id: scanId, provider, model_url_or_path: modelPath, preview_data: previewData, status: "ready" }, { onConflict: "scan_id" });
       if (modelError) throw modelError;
+    } else if (!localMode) {
+      // Do not leave a previous local/demo model attached to a new provider result.
+      const { error: staleModelError } = await client.from("body_models").delete().eq("scan_id", scanId);
+      if (staleModelError) throw staleModelError;
     }
     const { data: completedScan, error: completionError } = await client
       .from("scans")

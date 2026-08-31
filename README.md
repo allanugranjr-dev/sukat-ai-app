@@ -108,7 +108,42 @@ Each upload is validated as JPG, PNG, or WebP and must be under 10 MB. The file 
 
 The results viewer uses a lightweight Three.js scene rather than a 3D video. Users can drag to rotate the mannequin, scroll or pinch to zoom, reset the camera, pause auto-rotation, and show or hide measurement guides. The local reference image is also shown as the WebGL fallback/reference thumbnail for devices that cannot render the scene.
 
-For production-quality personalized results, configure a real provider. Until then, the hosted function uses the clearly labeled local demo fallback so scans can complete without getting stuck in the queue. When a provider is configured, the function creates short-lived signed URLs for the private views, sends the scan metadata and URLs, validates the response, writes measurements and an optional body-model asset, and sets the scan to `ready_for_review`. Invalid or failed provider responses set `failed` with a reason.
+For production-quality personalized results, configure a real provider. Until then, the hosted function uses the clearly labeled local demo fallback so scans can complete without getting stuck in the queue. When a provider is configured, the function grants short-lived access to the private views, sends either the generic JSON contract or the live provider's multipart files, validates the response, replaces the scan's previous result, and sets the scan to `ready_for_review`. Invalid or failed provider responses set `failed` with a reason.
+
+### JavTahir Live Measurements API provider
+
+SukatAI can call the MIT-licensed [Live-Measurements-Api](https://github.com/JavTahir/Live-Measurements-Api) Flask service as a measurement provider. The repository's README describes `/measurements`, but its current Flask implementation exposes `/upload_images`; SukatAI accepts either a provider root URL or `/measurements` and normalizes those forms to `/upload_images`.
+
+This workspace includes a SukatAI adapter around that service at `services/live-measurements-api`. The local adapter uses MediaPipe pose/segmentation and the supplied height; the optional MiDaS depth model is disabled by default so it can run on a laptop without a multi-gigabyte PyTorch install.
+
+Start the local provider in a second PowerShell window:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\services\live-measurements-api\start-local.ps1
+```
+
+The first setup can install its lightweight dependencies with `-Install`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\services\live-measurements-api\start-local.ps1 -Install
+```
+
+The local Node runtime is already pointed at `http://127.0.0.1:8001/upload_images` by the ignored `.env.node.local` file. Keep the Python provider running before submitting a scan. To use a hosted backend instead, configure the backend that performs scan processing:
+
+The current upstream `app.py` starts Flask on port `8001`, so a local Node setup can use `http://127.0.0.1:8001/upload_images`. A hosted Supabase function cannot reach your laptop; it needs the same service deployed behind a public HTTPS URL.
+
+```text
+RECONSTRUCTION_PROVIDER=live-measurements-api
+RECONSTRUCTION_API_URL=https://your-private-python-host.example/upload_images
+RECONSTRUCTION_API_KEY=your-provider-gateway-key
+RECONSTRUCTION_TIMEOUT_MS=120000
+```
+
+The adapter sends the private front and side views as `front` and `left_side` multipart files and sends the entered height as `height_cm`. SukatAI still requires the back view for the scan record, but the upstream service does not consume it. A valid height is required because the provider uses it for scale calibration; scans with unknown height are stopped instead of being scaled from an inaccurate default. The provider requires `Authorization: Bearer <PROVIDER_API_KEY>` and does not expose that key to the browser.
+
+The upstream response is a map such as `{"chest_circumference": 100.1, "waist": 82.2}`. SukatAI normalizes those values, rejects invalid or duplicate entries, stores no fabricated confidence score when the provider does not return one, and keeps the interactive model as a measurement-driven preview because this service does not return a GLB body mesh. The result remains approximate and must be reviewed by a dressmaker.
+
+Important: the upstream Flask app does not authenticate requests by default. Do not expose it directly to the internet with private customer images. Put it behind an HTTPS gateway or add server-side API-key validation to your deployment before configuring the Supabase Edge Function. `RECONSTRUCTION_API_KEY` is sent as a Bearer header, but the unmodified upstream app ignores that header.
 
 ### Provider response contract
 
@@ -186,7 +221,7 @@ Create a versioned local backup of the MariaDB database and scan storage with:
 
 Backups are written to backups/ by default. Set SUKATAI_BACKUP_DIR to place them on a separate drive. The backup command uses C:\xampp\mysql\bin\mysqldump.exe on Windows and can be pointed at another dump binary with SUKATAI_DB_DUMP_BIN.
 
-The Node local processor uses the same clearly labeled deterministic demo reconstruction as the other local runtimes. It does not call Imagen or an external reconstruction provider.
+The Node local processor uses the same clearly labeled deterministic demo reconstruction as the other local runtimes unless `.env.node.local` sets `RECONSTRUCTION_PROVIDER=live-measurements-api`, `RECONSTRUCTION_API_URL`, and `RECONSTRUCTION_API_KEY`. In that mode it reads the private local front and side files and calls the Python service directly. It does not call Imagen or silently fall back to demo values when the configured provider fails.
 
 ## XAMPP runtime
 
@@ -198,6 +233,8 @@ npm run xampp:deploy
 ```
 
 Open `http://localhost/bsit-sukat-ai/`. The deployment target is intentionally separate from any existing `C:\xampp\htdocs\sukatai` site. See `xampp/README.md` for admin-role setup and development mode.
+
+The PHP/XAMPP processor keeps its deterministic local fallback; use the Node runtime with `.env.node.local` or the hosted Supabase Edge Function when you need the live Python provider.
 
 ## Useful commands
 
