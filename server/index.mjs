@@ -10,7 +10,6 @@ import multer from "multer";
 import { Server } from "socket.io";
 
 import { canonicalAppUrl, config } from "./config.mjs";
-import { callLiveMeasurementsProvider, isLiveMeasurementsProvider } from "./liveMeasurements.mjs";
 import {
   closeDatabase,
   execute,
@@ -727,60 +726,19 @@ async function processScanJob(scanId) {
       return;
     }
 
-    const provider = config.reconstruction.provider;
-    const externalProvider = provider !== "local";
-
     const claim = await execute(
       "UPDATE scans SET status = ?, processing_provider = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'processing_queued', 'failed', 'draft', 'processing')",
-      ["processing", provider, scanId],
+      ["processing", "local", scanId],
     );
     if (claim.affectedRows === 0) {
       const current = await findScan(scanId);
       if (!current || current.status !== "processing") return;
-    }
-    if (externalProvider && !isLiveMeasurementsProvider(provider)) throw new Error(`Unsupported local reconstruction provider: ${provider}.`);
-    if (externalProvider && (!config.reconstruction.apiUrl || !config.reconstruction.apiKey)) throw new Error("The live measurement provider is not configured. Set RECONSTRUCTION_API_URL and RECONSTRUCTION_API_KEY in .env.node.local.");
-    if (externalProvider) {
-      let providerUrl;
-      try {
-        providerUrl = new URL(config.reconstruction.apiUrl);
-      } catch {
-        throw new Error("RECONSTRUCTION_API_URL is not a valid URL.");
-      }
-      if (!["http:", "https:"].includes(providerUrl.protocol)) throw new Error("RECONSTRUCTION_API_URL must use HTTP or HTTPS.");
     }
     await emitScanUpdate(scanId, "processing", "Processing has started. Your uploaded views are being checked.");
     await new Promise((resolve) => setTimeout(resolve, config.processingDelayMs));
 
     const current = await findScan(scanId);
     if (!current || current.status !== "processing") return;
-    if (externalProvider) {
-      const result = await callLiveMeasurementsProvider({
-        apiUrl: config.reconstruction.apiUrl,
-        apiKey: config.reconstruction.apiKey,
-        scan: current,
-        assets,
-        timeoutMs: config.reconstruction.timeoutMs,
-        readAsset: async (asset) => fs.readFile(await storageFile(asset.storage_path)),
-      });
-      await transaction(async (connection) => {
-        await connection.query("DELETE FROM measurements WHERE scan_id = ?", [scanId]);
-        for (const measurement of result.measurements) {
-          await connection.query(
-            "INSERT INTO measurements (id, scan_id, `key`, value, unit, confidence, ai_value) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [randomUUID(), scanId, measurement.key, measurement.value, measurement.unit, measurement.confidence, measurement.value],
-          );
-        }
-        await connection.query("DELETE FROM body_models WHERE scan_id = ?", [scanId]);
-        const finalUpdate = await connection.query(
-          "UPDATE scans SET status = ?, processing_provider = ?, processing_version = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
-          ["ready_for_review", provider, result.processing_version, scanId],
-        );
-        if (finalUpdate.affectedRows === 0) throw new ApiError("The scan changed while it was being processed.", 409);
-      });
-      await emitScanUpdate(scanId, "ready_for_review", "The live measurement provider returned a result ready for tailor review.");
-      return;
-    }
     const height = current.height_value === null ? 170 : Number(current.height_value) * (current.height_unit === "ftin" ? 2.54 : 1);
     const scale = Math.min(1.14, Math.max(0.86, height / 170));
     const penalty = current.height_value === null ? 10 : 0;
@@ -812,13 +770,12 @@ async function processScanJob(scanId) {
     await emitScanUpdate(scanId, "ready_for_review", "Your local scan result is ready for tailor review.");
   } catch (error) {
     console.error(`Scan processing failed for ${scanId}:`, error);
-    const failureMessage = error instanceof Error ? error.message.slice(0, 500) : "The scan processing service could not complete this scan.";
     try {
       const result = await execute(
         "UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
-        ["failed", failureMessage, scanId],
+        ["failed", "The local processing service could not complete this scan.", scanId],
       );
-      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", failureMessage);
+      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", "The local processing service could not complete this scan.");
     } catch (updateError) {
       console.error("Could not persist scan processing failure:", updateError);
     }

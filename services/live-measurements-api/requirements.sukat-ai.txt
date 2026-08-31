@@ -1,8 +1,0 @@
-# Lightweight local runtime for SukatAI.
-# The upstream requirements.txt also installs PyTorch and MiDaS. Those are
-# optional in app.py and are intentionally omitted here so the provider can
-# run on a laptop with limited disk space.
-Flask==3.1.0
-numpy==1.26.4
-opencv-contrib-python==4.11.0.86
-mediapipe==0.10.20
