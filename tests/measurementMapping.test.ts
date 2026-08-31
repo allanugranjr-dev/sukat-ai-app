@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ellipseCircumferenceFromRadii, ellipseRadiiForCircumference, findModelMeasurement, modelHeightCm, modelMeasurementCm, normalizeModelMeasurementKey } from "../src/lib/measurementMapping";
+import { ellipseCircumferenceFromRadii, ellipseRadiiForCircumference, findModelMeasurement, measurementGuideKey, modelHeightCm, modelMeasurementCm, normalizeModelMeasurementKey } from "../src/lib/measurementMapping";
 import { parseHeightInches } from "../src/lib/scanFlow";
 import type { Measurement } from "../src/lib/types";
 
@@ -27,6 +27,40 @@ describe("measurement mapping for the 3D model", () => {
     expect(normalizeModelMeasurementKey("Shoulder breadth")).toBe("shoulder_breadth");
     expect(normalizeModelMeasurementKey("headCircumference")).toBe("head_circumference");
     expect(findModelMeasurement([shoulder], ["shoulder"])).toBe(shoulder);
+  });
+
+  it("resolves measurement labels to interactive guide keys", () => {
+    expect(measurementGuideKey("Chest Circumference")).toBe("chest");
+    expect(measurementGuideKey("Thigh Left Circumference")).toBe("thigh_left");
+    expect(measurementGuideKey("Right Foot Width")).toBe("foot_width_right");
+    expect(measurementGuideKey("body_mass")).toBeNull();
+  });
+
+  it("maps every customer-facing measurement label to its matching model guide", () => {
+    const expectedGuides = {
+      "Ankle Left Circumference": "ankle_left",
+      "Upper arm": "upper_arm",
+      "Back To Shoulder": "back_to_shoulder",
+      "Bicep Right Circumference": "upper_arm_right",
+      "Calf Left Circumference": "calf_left",
+      Chest: "chest",
+      "Foot Length": "foot_length",
+      "Foot Width": "foot_width",
+      "Forearm Circumference": "forearm",
+      "Head Circumference": "head",
+      Hip: "hip",
+      Inseam: "inseam",
+      Neck: "neck",
+      "Neck To Pelvis": "neck_to_pelvis",
+      Shoulder: "shoulder",
+      "Thigh Left Circumference": "thigh_left",
+      Waist: "waist",
+      "Wrist Right Circumference": "wrist_right",
+    } as const;
+
+    Object.entries(expectedGuides).forEach(([label, guideKey]) => {
+      expect(measurementGuideKey(label)).toBe(guideKey);
+    });
   });
 
   it("prefers an exact measurement over a descriptive suffix", () => {

@@ -6,6 +6,7 @@ export type NodeRequestOptions = {
   method?: "GET" | "POST";
   body?: unknown;
   formData?: FormData;
+  timeoutMs?: number;
 };
 
 type NodeResponse<T> = {
@@ -48,17 +49,27 @@ export async function nodeRequest<T>(action: string, options: NodeRequestOptions
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(options.body);
   }
-  const response = await fetch(endpoint, {
-    method: options.method ?? (body ? "POST" : "GET"),
-    headers,
-    body,
-    credentials: "include",
-  });
-  const payload = await response.json().catch(() => null) as NodeResponse<T> | null;
-  if (!response.ok || !payload?.ok) {
-    throw new Error(payload?.message ?? ("The Node.js API returned HTTP " + response.status + "."));
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
+  try {
+    const response = await fetch(endpoint, {
+      method: options.method ?? (body ? "POST" : "GET"),
+      headers,
+      body,
+      credentials: "include",
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null) as NodeResponse<T> | null;
+    if (!response.ok || !payload?.ok) {
+      throw new Error(payload?.message ?? ("The Node.js API returned HTTP " + response.status + "."));
+    }
+    return payload.data as T;
+  } catch (reason: unknown) {
+    if (controller.signal.aborted) throw new Error("The Node.js API did not respond in time. Check that the local server is running and try again.");
+    throw reason;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-  return payload.data as T;
 }
 
 export function notifyNodeAuthStateChange(event: NodeAuthEvent, session: Session | null): void {

@@ -13,6 +13,11 @@
     "build:supabase": "tsc --noEmit && vite build --mode supabase",
     "build:xampp": "tsc --noEmit && vite build --mode xampp",
     "build:node": "tsc --noEmit && vite build --mode node",
+    "build:mobile": "tsc --noEmit && vite build --mode mobile",
+    "mobile:sync": "npm run build:mobile && cap sync android",
+    "mobile:apk": "npm run mobile:sync && cd android && gradlew.bat assembleDebug",
+    "mobile:run": "npm run mobile:sync && cap run android",
+    "mobile:open": "npm run mobile:sync && cap open android",
     "start:node": "node server/index.mjs",
     "node:setup": "node server/setup-db.mjs",
     "node:backup": "node server/backup.mjs",
@@ -22,6 +27,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@supabase/supabase-js": "latest",
     "@vitejs/plugin-react": "latest",
     "bcryptjs": "^3.0.3",
@@ -36,6 +43,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@types/three": "^0.185.4",

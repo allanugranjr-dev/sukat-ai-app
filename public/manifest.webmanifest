@@ -1,0 +1,17 @@
+{
+  "name": "SukatAI",
+  "short_name": "SukatAI",
+  "description": "Private, reviewable tailoring measurements.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f2f6fa",
+  "theme_color": "#f2f6fa",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

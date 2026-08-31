@@ -1,8 +1,10 @@
 node_modules
 dist
 dist-node
+dist-mobile
 .env*
 !.env.example
+!.env.mobile
 .env
 .env.local
 .env.xampp.local
