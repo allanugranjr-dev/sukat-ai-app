@@ -58,8 +58,10 @@ import {
 } from "./lib/data";
 import { isHeightValid, parseHeightInches, previousScanPosition, scanSteps, type ScanStep, validateUpload } from "./lib/scanFlow";
 import { ellipseRadiiForCircumference, measurementGuideKey, measurementGuideMatches, modelHeightCm, modelMeasurementCm } from "./lib/measurementMapping";
+import { extractModelPlaneContour } from "./lib/modelContours";
 import { invitationState, isRemovableInvitation } from "./lib/invitationLifecycle";
 import { requestScanProcessing, processingCopy } from "./lib/reconstructionProvider";
+import { getScanResultTruth, measurementProvenance, qualityIssueText } from "./lib/scanResultTruth";
 import { createSignedStorageUrl, deleteScanAsset, uploadScanAsset } from "./lib/storage";
 import { subscribeToNodeScan } from "./lib/nodeApi";
 import { invitationAppOrigin, publicAppOrigin, readableError, supabaseConfig } from "./lib/supabase";
@@ -77,6 +79,7 @@ import {
   type Order,
   type Organization,
   type Profile,
+  type ProcessingStage,
   type Role,
   type Scan,
   type ScanAsset,
@@ -86,7 +89,8 @@ import {
 
 type ThreeModule = typeof import("three");
 type OrbitControlsConstructor = typeof import("three/examples/jsm/controls/OrbitControls.js")["OrbitControls"];
-type ThreeRuntime = { three: ThreeModule; OrbitControls: OrbitControlsConstructor };
+type GLTFLoaderConstructor = typeof import("three/examples/jsm/loaders/GLTFLoader.js")["GLTFLoader"];
+type ThreeRuntime = { three: ThreeModule; OrbitControls: OrbitControlsConstructor; GLTFLoader: GLTFLoaderConstructor };
 
 let threeRuntimePromise: Promise<ThreeRuntime> | null = null;
 
@@ -95,7 +99,8 @@ function loadThreeRuntime(): Promise<ThreeRuntime> {
     threeRuntimePromise = Promise.all([
       import("three"),
       import("three/examples/jsm/controls/OrbitControls.js"),
-    ]).then(([three, controls]) => ({ three, OrbitControls: controls.OrbitControls }));
+      import("three/examples/jsm/loaders/GLTFLoader.js"),
+    ]).then(([three, controls, gltf]) => ({ three, OrbitControls: controls.OrbitControls, GLTFLoader: gltf.GLTFLoader }));
   }
   return threeRuntimePromise;
 }
@@ -317,8 +322,8 @@ function LandingPage({ onAuth }: { onAuth: (view: "signin" | "signup") => void }
     <header className="marketing-header"><Logo inverse /><nav className="marketing-nav"><a href="#how-it-works">How it works</a><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></nav><div className="marketing-actions"><button type="button" className="text-button light" onClick={() => onAuth("signin")}>Sign in <Icon name="arrow-right" size={15} /></button><Button variant="gold" onClick={() => onAuth("signup")}>Create an account</Button></div></header>
     <section className="hero-section"><div className="hero-copy"><Badge tone="dark" dot>PRIVATE MEASUREMENT WORKSPACE</Badge><h1>Tailoring begins with <em>better information.</em></h1><p className="hero-lede">Guided photo capture creates a secure, reviewable measurement record for the people making your clothes.</p><div className="hero-buttons"><Button variant="gold" onClick={() => onAuth("signup")} icon="arrow-right">Start with your measurements</Button><button type="button" className="hero-play" onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })}><span className="play-circle"><Icon name="play" size={13} /></span> See how it works</button></div><div className="hero-trust"><span><Icon name="shield" size={17} /> Private by design</span><span><Icon name="check" size={17} /> Tailor reviewed</span><span><Icon name="clock" size={17} /> Guided in a few minutes</span></div></div></section>
     <div className="logo-band"><span>Built for a clearer garment journey</span><div><span>Independent dressmakers</span><span>Private by default</span><span>Reviewable records</span></div></div>
-    <section id="how-it-works" className="how-section"><div className="center-heading"><p className="eyebrow">A calmer measurement journey</p><h2>From camera to confidence.</h2><p>Each step is visible, honest, and designed to keep your information in your hands.</p></div><div className="process-grid"><ProcessCard number="01" icon="scan" title="Capture" copy="Follow simple front, side, and back prompts. Upload instead if a camera is not available." /><ProcessCard number="02" icon="spark" title="Validate" copy="A configured reconstruction provider returns measurements only when the response passes validation." /><ProcessCard number="03" icon="dress" title="Review" copy="Your dressmaker can adjust the record with a reason and keep the review history intact." /><ProcessCard number="04" icon="check" title="Fit" copy="Use a verified measurement set when you are ready to begin an order or fitting." /></div></section>
-    <section id="privacy" className="trust-section"><div className="trust-panel"><div className="trust-copy"><p className="eyebrow">Private by default</p><h2>Your body data deserves a careful workflow.</h2><p>Photos stay in a private account. Only approved people can open them, and each link expires after a short time.</p><Button variant="secondary" onClick={() => onAuth("signup")} icon="arrow-right">Create an account</Button></div><div className="trust-points"><TrustPoint icon="lock" title="Private uploads" copy="Front, side, and back photos stay in your account instead of becoming public links." /><TrustPoint icon="ruler" title="Measurements you can review" copy="Returned measurements stay separate from any changes made by a dressmaker." /><TrustPoint icon="shield" title="Access by role" copy="Each person sees only the customers and records they are allowed to see." /></div></div></section>
+    <section id="how-it-works" className="how-section"><div className="center-heading"><p className="eyebrow">A calmer measurement journey</p><h2>From camera to confidence.</h2><p>Each step is visible, honest, and designed to keep your information in your hands.</p></div><div className="process-grid"><ProcessCard number="01" icon="scan" title="Capture" copy="Follow simple front and side prompts. Upload instead if a camera is not available." /><ProcessCard number="02" icon="spark" title="Validate" copy="A configured reconstruction provider returns measurements only when the response passes validation." /><ProcessCard number="03" icon="dress" title="Review" copy="Your dressmaker can adjust the record with a reason and keep the review history intact." /><ProcessCard number="04" icon="check" title="Fit" copy="Use a verified measurement set when you are ready to begin an order or fitting." /></div></section>
+    <section id="privacy" className="trust-section"><div className="trust-panel"><div className="trust-copy"><p className="eyebrow">Private by default</p><h2>Your body data deserves a careful workflow.</h2><p>Photos stay in a private account. Only approved people can open them, and each link expires after a short time.</p><Button variant="secondary" onClick={() => onAuth("signup")} icon="arrow-right">Create an account</Button></div><div className="trust-points"><TrustPoint icon="lock" title="Private uploads" copy="Front and side photos stay in your account instead of becoming public links." /><TrustPoint icon="ruler" title="Measurements you can review" copy="Returned measurements stay separate from any changes made by a dressmaker." /><TrustPoint icon="shield" title="Access by role" copy="Each person sees only the customers and records they are allowed to see." /></div></div></section>
     <section id="faq" className="faq-section"><div><p className="eyebrow">A few useful answers</p><h2>Made to be straightforward.</h2></div><div className="faq-list"><details open><summary>Do I need a camera?<span>+</span></summary><p>No. The guided capture flow accepts validated JPG, PNG, or WebP uploads for each view.</p></details><details><summary>Are the results exact?<span>+</span></summary><p>Measurement results depend on the configured reconstruction provider and must be reviewed by a dressmaker before they are verified.</p></details><details><summary>Can dressmakers sign up publicly?<span>+</span></summary><p>No. Dressmaker accounts are created through an administrator invitation and a verified Supabase Auth flow.</p></details></div></section>
     <footer className="marketing-footer"><Logo inverse compact /><span>© {new Date().getFullYear()} SukatAI</span><div><a href="#privacy">Privacy</a><a href="#faq">FAQ</a></div></footer>
   </div>;
@@ -793,6 +798,8 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
   const [moreOpen, setMoreOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const mobileMenuRef = useRef<HTMLButtonElement | null>(null);
+  const mobileNavigationRef = useRef<HTMLElement | null>(null);
+  const mobileReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const notificationWrapRef = useRef<HTMLDivElement | null>(null);
   const notificationButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreWrapRef = useRef<HTMLDivElement | null>(null);
@@ -807,7 +814,30 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
   const unread = notifications.filter((item) => !item.read_at).length;
   const workspaceLabel = profile.role === "customer" ? "Customer account" : profile.role === "dressmaker" ? "Dressmaker workspace" : "Administrator console";
   const profileTarget = profile.role === "admin" ? "settings" : "profile";
-  const go = (next: string) => { onNavigate(next); setMobileOpen(false); setMoreOpen(false); setNotificationsOpen(false); setProfileOpen(false); };
+  const restoreMobileMenuFocus = () => {
+    const returnFocus = mobileReturnFocusRef.current;
+    setMobileOpen(false);
+    if (returnFocus) window.requestAnimationFrame(() => returnFocus.focus());
+  };
+  const toggleMobileNavigation = () => {
+    if (mobileOpen) {
+      restoreMobileMenuFocus();
+      return;
+    }
+    mobileReturnFocusRef.current = mobileMenuRef.current;
+    setMoreOpen(false);
+    setNotificationsOpen(false);
+    setProfileOpen(false);
+    setMobileOpen(true);
+  };
+  const go = (next: string) => {
+    const shouldRestoreMobileFocus = mobileOpen;
+    onNavigate(next);
+    setMoreOpen(false);
+    setNotificationsOpen(false);
+    setProfileOpen(false);
+    if (shouldRestoreMobileFocus) restoreMobileMenuFocus();
+  };
   const primaryItems = navByRole[profile.role].filter((item) => primaryNavByRole[profile.role].includes(item.key));
   const secondaryItems = navByRole[profile.role].filter((item) => !primaryNavByRole[profile.role].includes(item.key));
   const readNotification = async (notification: Notification) => {
@@ -837,10 +867,7 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
         setProfileOpen(false);
         profileButtonRef.current?.focus();
       }
-      if (mobileOpen) {
-        setMobileOpen(false);
-        mobileMenuRef.current?.focus();
-      }
+      if (mobileOpen) restoreMobileMenuFocus();
     };
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
@@ -849,6 +876,12 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [mobileOpen, moreOpen, notificationsOpen, profileOpen]);
+
+  useEffect(() => {
+    if (!mobileOpen) return undefined;
+    mobileNavigationRef.current?.querySelector<HTMLButtonElement>(".side-nav-item")?.focus();
+    return undefined;
+  }, [mobileOpen]);
 
   useEffect(() => {
     if (!mobileOpen) return undefined;
@@ -877,7 +910,7 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
         return;
       }
       if (mobileOpen) {
-        setMobileOpen(false);
+        restoreMobileMenuFocus();
         event.preventDefault();
         return;
       }
@@ -896,7 +929,7 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
   const mobileLabel = (item: { key: Page; label: string }) => item.key === "overview" ? "Home" : item.key === "scan" ? "Scan" : item.key === "measurements" ? "Measurements" : item.key === "reviews" ? "Reviews" : item.key === "orders" ? "Orders" : item.key === "dashboard" ? "Dashboard" : item.label;
   return <div className="app-shell" data-role={profile.role}>
     <a className="skip-link" href="#main-content">Skip to content</a>
-    <aside id="workspace-navigation" aria-label={workspaceLabel} className={cn("app-sidebar", mobileOpen && "mobile-open")}>
+    <aside ref={mobileNavigationRef} id="workspace-navigation" aria-label={workspaceLabel} className={cn("app-sidebar", mobileOpen && "mobile-open")}>
       <div className="sidebar-brand"><Logo compact inverse /><span className="workspace-label">{workspaceLabel}</span></div>
       <nav className="side-nav" aria-label={`${workspaceLabel} navigation`}>
         {primaryItems.map((item) => <button type="button" key={item.key} aria-label={item.key === "reviews" && unread > 0 ? `${item.label}, ${unread} unread` : item.label} aria-current={page === item.key ? "page" : undefined} className={cn("side-nav-item", page === item.key && "active")} onClick={() => go(item.key)}><Icon name={item.icon} size={19} /><span>{item.label}</span>{item.key === "reviews" && unread > 0 && <span className="nav-count" aria-hidden="true">{unread}</span>}</button>)}
@@ -907,10 +940,10 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
       </nav>
       <div className="sidebar-bottom"><div className="sidebar-note"><Icon name="lock" size={15} /><span>Private by default<br /><small>Only approved people can view it</small></span></div><button type="button" className="side-nav-item logout" aria-label="Log out" onClick={onSignOut}><Icon name="logout" size={19} /><span>Log out</span></button></div>
     </aside>
-    {mobileOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
-    <div className="app-main">
+    {mobileOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" onClick={restoreMobileMenuFocus} />}
+    <div className="app-main" inert={mobileOpen || undefined} aria-hidden={mobileOpen || undefined}>
       <header className="app-topbar">
-        <button ref={mobileMenuRef} type="button" className="mobile-menu" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={() => setMobileOpen((value) => !value)}><Icon name="menu" size={21} /></button>
+        <button ref={mobileMenuRef} type="button" className="mobile-menu" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-navigation" onClick={toggleMobileNavigation}><Icon name="menu" size={21} /></button>
         <div className="mobile-topbar-brand"><Logo compact /></div>
         <div className="topbar-context"><span className="eyebrow">{workspaceLabel}</span><strong>{profile.organization_id ? "Your organization is connected" : profile.role === "customer" ? "Your private account" : "Ask an administrator to assign your organization"}</strong></div>
         <div className="topbar-actions">
@@ -933,12 +966,12 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
 }
 
 type CaptureKey = "front" | "side" | "back";
-type CaptureSlot = { key: CaptureKey; label: string; captured: boolean; asset?: ScanAsset };
+type CaptureSlot = { key: CaptureKey; label: string; required: boolean; captured: boolean; asset?: ScanAsset };
 
-const captureLabels: Array<{ key: CaptureKey; label: string }> = [
-  { key: "front", label: "Front" },
-  { key: "side", label: "Side" },
-  { key: "back", label: "Back" },
+const captureLabels: Array<{ key: CaptureKey; label: string; required: boolean }> = [
+  { key: "front", label: "Front", required: true },
+  { key: "side", label: "Side", required: true },
+  { key: "back", label: "Back", required: false },
 ];
 
 function emptyCaptureSlots(): CaptureSlot[] {
@@ -976,7 +1009,7 @@ function CustomerDashboard({ profile, onNavigate }: { profile: Profile; onNaviga
   const latestScan = activeScan ?? verifiedScans[0];
   const loading = scansState.loading || ordersState.loading;
   const error = scansState.error || ordersState.error;
-  return <div className="page-stack"><SectionHeader eyebrow={`CUSTOMER WORKROOM · ${formatDate(new Date())}`} title="Your measurements" description="Start a scan or open your latest measurement record." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a scan</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { scansState.reload(); ordersState.reload(); }} /> : <><section className="welcome-banner"><div><Badge tone={verifiedScans.length > 0 ? "success" : "teal"} dot>{verifiedScans.length > 0 ? "MEASUREMENTS READY" : "ACCOUNT READY"}</Badge><h2>{verifiedScans.length > 0 ? "Your checked measurements are ready." : "Start a clearer scan."}</h2><p>{activeScan ? `Your current scan is ${scanStatusLabel(activeScan.status).toLowerCase()}.` : "Create a guided scan when you are ready. Results appear after the service checks your photos."}</p><div className="welcome-actions"><Button onClick={() => onNavigate("scan")} icon="scan">{activeScan ? "Continue scan" : "Start a scan"}</Button>{verifiedScans.length > 0 && <Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Start an order</Button>}</div></div><div className="welcome-orbit"><div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" /><span><Icon name="ruler" size={27} /></span></div></section><div className="stats-grid four-stats"><StatCard icon="scan" label="Scans" value={String(scans.length)} detail={activeScan ? scanStatusLabel(activeScan.status) : latestScan ? "Ready to review" : "No active scan"} onClick={() => onNavigate("scan")} /><StatCard icon="ruler" label="Checked sets" value={String(verifiedScans.length)} detail={verifiedScans.length ? "Ready to share" : "Not available yet"} onClick={() => onNavigate("measurements")} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail={orders.length ? "From your account" : "No orders yet"} onClick={() => onNavigate("orders")} /><StatCard icon="calendar" label="Fittings" value="—" detail="No fitting requests" onClick={() => onNavigate("fittings")} /></div><div className="dashboard-grid"><Panel className="latest-measurement"><div className="panel-heading"><div><p className="eyebrow">LATEST ACTIVITY</p><h2>{latestScan ? latestScan.status === "verified" ? "Latest measurement" : "Current scan" : "No measurements yet"}</h2></div>{latestScan && <StatusBadge status={latestScan.status} />}</div>{latestScan ? <div className="status-card"><span className="status-card-icon"><Icon name={latestScan.status === "verified" ? "ruler" : "scan"} size={22} /></span><div><strong>{latestScan.status === "verified" ? `Measurements checked ${formatDate(latestScan.updated_at)}` : `Scan created ${formatDate(latestScan.created_at)}`}</strong><p>{latestScan.status === "verified" ? "Your checked measurement set is ready to review or share with your dressmaker." : latestScan.status === "processing_queued" || latestScan.status === "processing" ? "Your uploaded views are waiting while the service checks them." : "Continue the guided flow to add or review your views."}</p></div><Button variant="ghost" onClick={() => onNavigate(latestScan.status === "verified" ? "measurements" : "scan")} icon="arrow-right">{latestScan.status === "verified" ? "Open measurements" : "Open scan"}</Button></div> : <DataState icon="ruler" title="No measurements yet" body="Start a scan to create your first private measurement record." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} />}</Panel><Panel className="scan-prompt"><p className="eyebrow">HOW IT WORKS</p><h2>A guided path from capture to review.</h2><div className="mini-steps"><span><i>01</i><b>Capture</b><small>Front, side, back</small></span><span><i>02</i><b>Check</b><small>Measurements</small></span><span><i>03</i><b>Review</b><small>Dressmaker check</small></span></div><button type="button" className="text-button" onClick={() => onNavigate("scan")}>Open photo guide <Icon name="arrow-right" size={15} /></button></Panel></div></>}</div>;
+  return <div className="page-stack"><SectionHeader eyebrow={`CUSTOMER WORKROOM · ${formatDate(new Date())}`} title="Your measurements" description="Start a scan or open your latest measurement record." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a scan</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { scansState.reload(); ordersState.reload(); }} /> : <><section className="welcome-banner"><div><Badge tone={verifiedScans.length > 0 ? "success" : "teal"} dot>{verifiedScans.length > 0 ? "MEASUREMENTS READY" : "ACCOUNT READY"}</Badge><h2>{verifiedScans.length > 0 ? "Your checked measurements are ready." : "Start a clearer scan."}</h2><p>{activeScan ? `Your current scan is ${scanStatusLabel(activeScan.status).toLowerCase()}.` : "Create a guided scan when you are ready. Results appear after the service checks your photos."}</p><div className="welcome-actions"><Button onClick={() => onNavigate("scan")} icon="scan">{activeScan ? "Continue scan" : "Start a scan"}</Button>{verifiedScans.length > 0 && <Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Start an order</Button>}</div></div><div className="welcome-orbit"><div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" /><span><Icon name="ruler" size={27} /></span></div></section><div className="stats-grid four-stats"><StatCard icon="scan" label="Scans" value={String(scans.length)} detail={activeScan ? scanStatusLabel(activeScan.status) : latestScan ? "Ready to review" : "No active scan"} onClick={() => onNavigate("scan")} /><StatCard icon="ruler" label="Checked sets" value={String(verifiedScans.length)} detail={verifiedScans.length ? "Ready to share" : "Not available yet"} onClick={() => onNavigate("measurements")} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail={orders.length ? "From your account" : "No orders yet"} onClick={() => onNavigate("orders")} /><StatCard icon="calendar" label="Fittings" value="—" detail="No fitting requests" onClick={() => onNavigate("fittings")} /></div><div className="dashboard-grid"><Panel className="latest-measurement"><div className="panel-heading"><div><p className="eyebrow">LATEST ACTIVITY</p><h2>{latestScan ? latestScan.status === "verified" ? "Latest measurement" : "Current scan" : "No measurements yet"}</h2></div>{latestScan && <StatusBadge status={latestScan.status} />}</div>{latestScan ? <div className="status-card"><span className="status-card-icon"><Icon name={latestScan.status === "verified" ? "ruler" : "scan"} size={22} /></span><div><strong>{latestScan.status === "verified" ? `Measurements checked ${formatDate(latestScan.updated_at)}` : `Scan created ${formatDate(latestScan.created_at)}`}</strong><p>{latestScan.status === "verified" ? "Your checked measurement set is ready to review or share with your dressmaker." : latestScan.status === "processing_queued" || latestScan.status === "processing" ? "Your uploaded views are waiting while the service checks them." : "Continue the guided flow to add or review your views."}</p></div><Button variant="ghost" onClick={() => onNavigate(latestScan.status === "verified" ? "measurements" : "scan")} icon="arrow-right">{latestScan.status === "verified" ? "Open measurements" : "Open scan"}</Button></div> : <DataState icon="ruler" title="No measurements yet" body="Start a scan to create your first private measurement record." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} />}</Panel><Panel className="scan-prompt"><p className="eyebrow">HOW IT WORKS</p><h2>A guided path from capture to review.</h2><div className="mini-steps"><span><i>01</i><b>Capture</b><small>Front + side</small></span><span><i>02</i><b>Check</b><small>Measurements</small></span><span><i>03</i><b>Review</b><small>Dressmaker check</small></span></div><button type="button" className="text-button" onClick={() => onNavigate("scan")}>Open photo guide <Icon name="arrow-right" size={15} /></button></Panel></div></>}</div>;
 }
 
 function StatCard({ icon, label, value, detail, onClick }: { icon: IconName; label: string; value: string; detail: string; onClick?: () => void }) {
@@ -1019,7 +1052,7 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
     setUnit(bundle.scan.height_unit);
     setCaptures(captureSlotsFromBundle(bundle));
     const nextIndex = captureLabels.findIndex((item) => !bundle.assets.some((asset) => asset.asset_type === item.key));
-    setCaptureIndex(nextIndex === -1 ? 2 : nextIndex);
+    setCaptureIndex(nextIndex === -1 ? 0 : nextIndex);
   };
 
   useEffect(() => {
@@ -1096,7 +1129,7 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
 
   const continueFromHeight = async () => {
     setError("");
-    if (!isHeightValid(height, unit, unknownHeight)) { setError(unit === "cm" ? "Enter a height between 120 and 230 cm, or choose unknown." : "Enter a height between 4'0\" and 7'11\", or choose unknown."); return; }
+    if (!isHeightValid(height, unit, unknownHeight)) { setError(unit === "cm" ? "Enter a height between 120 and 230 cm." : "Enter a height between 4'0\" and 7'11\"."); return; }
     if (!scanId) { setError("Your scan draft is missing. Return to preparation and start again."); return; }
     setBusy(true);
     try {
@@ -1177,7 +1210,7 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
 
   const completeCapture = async () => {
     setError("");
-    if (!scanId || captures.some((item) => !item.captured)) { setError("Upload a front, side, and back view before continuing."); return; }
+    if (!scanId || captures.some((item) => item.required && !item.captured)) { setError("Upload both the front and side views before continuing. A back view is optional."); return; }
     stopCamera();
     setBusy(true);
     setStep("processing");
@@ -1219,24 +1252,45 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
   }, [cameraOn, captureIndex, onNavigate, step]);
 
   if (hydrating) return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Start a new scan" description="Loading any unfinished scan securely…" /><LoadingState /></div>;
-  return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Start a new scan" description="Three guided views, a private upload, and a reviewable result." action={step !== "prep" ? <Button variant="ghost" icon="arrow-left" onClick={goBack}>Back</Button> : <Button variant="secondary" icon="x" onClick={() => onNavigate("overview")}>Exit scan</Button>} /><ScanProgress step={step} />{error && <InlineError message={error} />}{notice && <div className="form-notice scan-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}{step === "prep" && <ScanPreparation prep={prep} consent={consent} setPrep={setPrep} setConsent={setConsent} onContinue={continueFromPrep} busy={busy} />}{step === "height" && <ScanHeight height={height} unit={unit} unknownHeight={unknownHeight} setHeight={setHeight} setUnit={setUnit} setUnknownHeight={setUnknownHeight} onContinue={continueFromHeight} busy={busy} />}{step === "capture" && <ScanCapture captures={captures} captureIndex={captureIndex} setCaptureIndex={setCaptureIndex} cameraOn={cameraOn} videoRef={videoRef} uploading={uploading} onStartCamera={() => void startCamera()} onStopCamera={stopCamera} onCapture={() => void captureCameraFrame()} onChooseFile={(event) => void chooseFile(event)} onRemove={async (index) => { const asset = captures[index]?.asset; if (!asset) return; try { await deleteScanAsset(asset); setCaptures((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, captured: false, asset: undefined } : item)); setNotice(`${captures[index].label} view removed.`); } catch (reason: unknown) { setError(readableError(reason)); } }} onContinue={() => void completeCapture()} busy={busy} />}{step === "processing" && scanId && <ScanProcessing scanId={scanId} initialMessage={processingNotice} onBack={() => { setStep("capture"); setCaptureIndex(2); }} onResults={() => setStep("results")} />}{step === "results" && scanId && <ScanResults scanId={scanId} onRecapture={() => { setStep("capture"); setCaptureIndex(0); }} onDashboard={() => onNavigate("overview")} />}</div>;
+  return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Start a new scan" description="Two required views, an optional back view, and a reviewable result." action={step !== "prep" ? <Button variant="ghost" icon="arrow-left" onClick={goBack}>Back</Button> : <Button variant="secondary" icon="x" onClick={() => onNavigate("overview")}>Exit scan</Button>} /><ScanProgress step={step} />{error && <InlineError message={error} />}{notice && <div className="form-notice scan-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}{step === "prep" && <ScanPreparation prep={prep} consent={consent} setPrep={setPrep} setConsent={setConsent} onContinue={continueFromPrep} busy={busy} />}{step === "height" && <ScanHeight height={height} unit={unit} unknownHeight={unknownHeight} setHeight={setHeight} setUnit={setUnit} setUnknownHeight={setUnknownHeight} onContinue={continueFromHeight} busy={busy} />}{step === "capture" && <ScanCapture captures={captures} captureIndex={captureIndex} setCaptureIndex={setCaptureIndex} cameraOn={cameraOn} videoRef={videoRef} uploading={uploading} onStartCamera={() => void startCamera()} onStopCamera={stopCamera} onCapture={() => void captureCameraFrame()} onChooseFile={(event) => void chooseFile(event)} onRemove={async (index) => { const asset = captures[index]?.asset; if (!asset) return; try { await deleteScanAsset(asset); setCaptures((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, captured: false, asset: undefined } : item)); setNotice(`${captures[index].label} view removed.`); } catch (reason: unknown) { setError(readableError(reason)); } }} onContinue={() => void completeCapture()} busy={busy} />}{step === "processing" && scanId && <ScanProcessing scanId={scanId} initialMessage={processingNotice} onBack={() => { setStep("capture"); setCaptureIndex(0); }} onResults={() => setStep("results")} />}{step === "results" && scanId && <ScanResults scanId={scanId} onRecapture={() => { setStep("capture"); setCaptureIndex(0); }} onDashboard={() => onNavigate("overview")} />}</div>;
 }
 
 function ScanPreparation({ prep, consent, setPrep, setConsent, onContinue, busy }: { prep: boolean[]; consent: boolean[]; setPrep: (value: boolean[]) => void; setConsent: (value: boolean[]) => void; onContinue: () => void; busy: boolean }) {
   const prepItems = ["Use bright, even lighting.", "Stand far enough back to show your whole body.", "Wear fitted clothing without a bulky jacket.", "Keep your phone steady at chest height."];
   const consentItems = ["I agree to keep these scan photos in my private account.", "I understand that a dressmaker should check the measurements before sewing."];
-  return <div className="scan-content"><Panel className="scan-main-card"><p className="eyebrow">STEP 01 · PREPARE</p><h2>Get ready for three photos.</h2><p className="panel-lede">A few simple checks help us create a clearer fit record for you and your dressmaker.</p><div className="checklist" role="group" aria-label="Photo preparation checklist">{prepItems.map((item, index) => <label key={item} className="check-row"><input type="checkbox" checked={prep[index]} onChange={(event) => setPrep(prep.map((value, itemIndex) => itemIndex === index ? event.target.checked : value))} /><span><i aria-hidden="true">{index + 1}</i><strong>{item}</strong></span></label>)}</div><div className="consent-box" role="group" aria-label="Privacy and review agreement"><p className="eyebrow">BEFORE YOU CONTINUE</p>{consentItems.map((item, index) => <label key={item} className="check-label"><input type="checkbox" checked={consent[index]} onChange={(event) => setConsent(consent.map((value, itemIndex) => itemIndex === index ? event.target.checked : value))} /><span>{item}</span></label>)}</div><Button onClick={onContinue} disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Creating secure draft…" : "Continue to height"}</Button></Panel><Panel className="scan-side-card"><span className="side-card-icon"><Icon name="shield" size={20} /></span><h3>Your photos stay private.</h3><p>Nothing is uploaded until you continue. Each view is saved securely with this scan and shared only with authorized reviewers.</p><div className="side-card-list"><span><Icon name="lock" size={15} /> Private account access</span><span><Icon name="camera" size={15} /> Camera or upload</span><span><Icon name="message" size={15} /> Review when ready</span></div></Panel></div>;
+  return <div className="scan-content"><Panel className="scan-main-card"><p className="eyebrow">STEP 01 · PREPARE</p><h2>Get ready for two photos.</h2><p className="panel-lede">A few simple checks help us create a clearer fit record for you and your dressmaker. A back photo can be added later if you have one.</p><div className="checklist" role="group" aria-label="Photo preparation checklist">{prepItems.map((item, index) => <label key={item} className="check-row"><input type="checkbox" checked={prep[index]} onChange={(event) => setPrep(prep.map((value, itemIndex) => itemIndex === index ? event.target.checked : value))} /><span><i aria-hidden="true">{index + 1}</i><strong>{item}</strong></span></label>)}</div><div className="consent-box" role="group" aria-label="Privacy and review agreement"><p className="eyebrow">BEFORE YOU CONTINUE</p>{consentItems.map((item, index) => <label key={item} className="check-label"><input type="checkbox" checked={consent[index]} onChange={(event) => setConsent(consent.map((value, itemIndex) => itemIndex === index ? event.target.checked : value))} /><span>{item}</span></label>)}</div><Button onClick={onContinue} disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Creating secure draft…" : "Continue to height"}</Button></Panel><Panel className="scan-side-card"><span className="side-card-icon"><Icon name="shield" size={20} /></span><h3>Your photos stay private.</h3><p>Nothing is uploaded until you continue. Each view is saved securely with this scan and shared only with authorized reviewers.</p><div className="side-card-list"><span><Icon name="lock" size={15} /> Private account access</span><span><Icon name="camera" size={15} /> Two required views</span><span><Icon name="message" size={15} /> Review when ready</span></div></Panel></div>;
 }
 
 function ScanHeight({ height, unit, unknownHeight, setHeight, setUnit, setUnknownHeight, onContinue, busy }: { height: string; unit: "cm" | "ftin"; unknownHeight: boolean; setHeight: (value: string) => void; setUnit: (value: "cm" | "ftin") => void; setUnknownHeight: (value: boolean) => void; onContinue: () => void; busy: boolean }) {
-  return <div className="calibration-card"><div className="calibration-visual" aria-hidden="true"><div className="height-grid" /><div className="height-ruler"><span>230</span><span>200</span><span>170</span><span>140</span><span>120</span></div><div className="height-person"><i /><b /><span /><em /><strong /></div><div className="height-line" /></div><div className="calibration-copy"><p className="eyebrow">STEP 02 · HEIGHT</p><h2>Tell us your height.</h2><p>Height helps us size the body model. Use your usual unit, or choose “I don’t know” if you would rather leave it blank.</p><div className="unit-toggle" role="group" aria-label="Height unit"><button type="button" aria-pressed={unit === "cm"} className={unit === "cm" ? "active" : ""} onClick={() => setUnit("cm")}>Centimetres</button><button type="button" aria-pressed={unit === "ftin"} className={unit === "ftin" ? "active" : ""} onClick={() => setUnit("ftin")}>Feet / inches</button></div><div className="field"><label htmlFor="height-value">Height</label><input id="height-value" name="height" aria-describedby="height-help" value={height} onChange={(event) => setHeight(event.target.value)} disabled={unknownHeight} placeholder={unit === "cm" ? "e.g. 170" : "e.g. 5'7\""} /><small id="height-help" className="field-hint">{unit === "cm" ? "Enter between 120 and 230 cm." : "Enter between 4'0\" and 7'11\"."}</small></div><label className="check-label"><input name="height-unknown" type="checkbox" checked={unknownHeight} onChange={(event) => setUnknownHeight(event.target.checked)} /><span>I don’t know my height</span></label><Button onClick={onContinue} disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Saving height…" : "Continue to photos"}</Button></div></div>;
+  return <div className="calibration-card"><div className="calibration-visual" aria-hidden="true"><div className="height-grid" /><div className="height-ruler"><span>230</span><span>200</span><span>170</span><span>140</span><span>120</span></div><div className="height-person"><i /><b /><span /><em /><strong /></div><div className="height-line" /></div><div className="calibration-copy"><p className="eyebrow">STEP 02 · HEIGHT</p><h2>Tell us your height.</h2><p>Height is used to calibrate the two photos into real-world centimetres. Enter a value before continuing.</p><div className="unit-toggle" role="group" aria-label="Height unit"><button type="button" aria-pressed={unit === "cm"} className={unit === "cm" ? "active" : ""} onClick={() => setUnit("cm")}>Centimetres</button><button type="button" aria-pressed={unit === "ftin"} className={unit === "ftin" ? "active" : ""} onClick={() => setUnit("ftin")}>Feet / inches</button></div><div className="field"><label htmlFor="height-value">Height</label><input id="height-value" name="height" aria-describedby="height-help" value={height} onChange={(event) => setHeight(event.target.value)} placeholder={unit === "cm" ? "e.g. 170" : "e.g. 5'7\""} /><small id="height-help" className="field-hint">{unit === "cm" ? "Enter between 120 and 230 cm." : "Enter between 4'0\" and 7'11\"."}</small></div><Button onClick={onContinue} disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Saving height…" : "Continue to photos"}</Button></div></div>;
 }
 
 function ScanCapture({ captures, captureIndex, setCaptureIndex, cameraOn, videoRef, uploading, onStartCamera, onStopCamera, onCapture, onChooseFile, onRemove, onContinue, busy }: { captures: CaptureSlot[]; captureIndex: number; setCaptureIndex: (index: number) => void; cameraOn: boolean; videoRef: React.RefObject<HTMLVideoElement | null>; uploading: boolean; onStartCamera: () => void; onStopCamera: () => void; onCapture: () => void; onChooseFile: (event: ChangeEvent<HTMLInputElement>) => void; onRemove: (index: number) => Promise<void>; onContinue: () => void; busy: boolean }) {
   const current = captures[captureIndex] ?? captures[0];
   const currentUrl = current?.asset?.signedUrl;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  return <div className="capture-layout"><Panel className="capture-stage-card"><div className="capture-stage-heading"><div><p className="eyebrow">STEP 03 · PHOTOS</p><h2>{current?.label ?? "Front"} view</h2><p>Keep your whole body in frame. You can replace any photo before submitting.</p></div><Badge tone={current?.captured ? "success" : "teal"} dot>{current?.captured ? "UPLOADED" : "READY"}</Badge></div><p className="sr-only" role="status" aria-live="polite">Viewing {current?.label ?? "Front"} view. {current?.captured ? "This view is uploaded." : "This view is ready for capture."}</p><div className={cn("capture-stage", currentUrl && "has-capture")} role="region" aria-label={`${current?.label ?? "Front"} camera capture area`}>{cameraOn && <video ref={videoRef} autoPlay muted playsInline className="capture-video" aria-label="Live camera preview" />}{!cameraOn && currentUrl && <img className="capture-preview" src={currentUrl} alt={`${current?.label} scan view`} />}{!cameraOn && !currentUrl && <div className="capture-empty"><span><Icon name="camera" size={31} /></span><strong>Camera or upload</strong><small>Your selected view will appear here after a successful upload.</small></div>}{cameraOn && <div className="capture-guide" aria-hidden="true"><span /><span /><span /></div>}</div><div className="capture-controls"><div className="capture-progress"><p className="eyebrow">VIEWS</p><div>{captures.map((slot, index) => <button key={slot.key} type="button" className={cn(index === captureIndex && "current", slot.captured && "done")} aria-current={index === captureIndex ? "step" : undefined} aria-label={`${slot.label} view${slot.captured ? ", uploaded" : ""}`} onClick={() => setCaptureIndex(index)}><i>{slot.captured ? <Icon name="check" size={12} /> : index + 1}</i><small>{slot.label}</small></button>)}</div></div><div className="capture-actions">{cameraOn ? <><Button variant="secondary" onClick={onStopCamera} icon="x">Stop camera</Button><Button onClick={onCapture} disabled={uploading} icon="camera">{uploading ? "Uploading…" : "Capture frame"}</Button></> : <><input ref={fileInputRef} className="sr-only" type="file" aria-label={"Upload " + (current?.label ?? "current") + " scan photo"} accept="image/jpeg,image/png,image/webp" onChange={onChooseFile} /><Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={uploading} icon="upload">{uploading ? "Uploading…" : "Upload image"}</Button><Button variant="ghost" onClick={onStartCamera} disabled={uploading} icon="camera">Use camera</Button></>}</div></div></Panel><div className="capture-side"><Panel className="capture-next"><p className="eyebrow">NEXT STEP</p><h3>{captures.every((slot) => slot.captured) ? "All three views are ready." : `Add the ${captures.find((slot) => !slot.captured)?.label.toLowerCase() ?? "next"} view.`}</h3><p>{captures.every((slot) => slot.captured) ? "Submit these photos when they look clear. We will check the result before showing measurements." : "Move between Front, Side, and Back to add or replace a photo."}</p><Button onClick={onContinue} disabled={busy || uploading || captures.some((slot) => !slot.captured)} icon="arrow-right">{busy ? "Submitting…" : "Submit photos"}</Button></Panel><Panel className="capture-quality"><p className="eyebrow">PHOTO CHECKLIST</p><div className="quality-list"><span><Icon name="check" size={14} /> JPG, PNG, or WebP</span><span><Icon name="check" size={14} /> Maximum 10 MB each</span><span><Icon name="lock" size={14} /> Stored privately</span></div><div className="uploaded-list">{captures.map((slot, index) => <div key={slot.key}><span className={slot.captured ? "uploaded" : "not-uploaded"}><Icon name={slot.captured ? "check" : "clock"} size={12} /></span><span><strong>{slot.label}</strong><small>{slot.captured ? "Uploaded" : "Waiting"}</small></span>{slot.captured && <button type="button" className="icon-button" aria-label={`Remove ${slot.label} view`} onClick={() => void onRemove(index)}><Icon name="x" size={14} /></button>}</div>)}</div></Panel></div></div>;
+  const requiredReady = captures.filter((slot) => slot.required).every((slot) => slot.captured);
+  const nextSlot = captures.find((slot) => !slot.captured);
+  return <div className="capture-layout"><Panel className="capture-stage-card"><div className="capture-stage-heading"><div><p className="eyebrow">STEP 03 · PHOTOS</p><h2>{current?.label ?? "Front"} view</h2><p>Keep your whole body in frame. You can replace any photo before submitting.</p></div><Badge tone={current?.captured ? "success" : "teal"} dot>{current?.captured ? "UPLOADED" : current?.required ? "REQUIRED" : "OPTIONAL"}</Badge></div><p className="sr-only" role="status" aria-live="polite">Viewing {current?.label ?? "Front"} view. {current?.captured ? "This view is uploaded." : "This view is ready for capture."}</p><div className={cn("capture-stage", currentUrl && "has-capture")} role="region" aria-label={`${current?.label ?? "Front"} camera capture area`}>{cameraOn && <video ref={videoRef} autoPlay muted playsInline className="capture-video" aria-label="Live camera preview" />}{!cameraOn && currentUrl && <img className="capture-preview" src={currentUrl} alt={`${current?.label} scan view`} />}{!cameraOn && !currentUrl && <div className="capture-empty"><span><Icon name="camera" size={31} /></span><strong>Camera or upload</strong><small>Your selected view will appear here after a successful upload.</small></div>}{cameraOn && <div className="capture-guide" aria-hidden="true"><span /><span /><span /></div>}</div><div className="capture-controls"><div className="capture-progress"><p className="eyebrow">VIEWS · FRONT + SIDE REQUIRED</p><div>{captures.map((slot, index) => <button key={slot.key} type="button" className={cn(index === captureIndex && "current", slot.captured && "done")} aria-current={index === captureIndex ? "step" : undefined} aria-label={`${slot.label} view${slot.required ? " required" : " optional"}${slot.captured ? ", uploaded" : ""}`} onClick={() => setCaptureIndex(index)}><i>{slot.captured ? <Icon name="check" size={12} /> : index + 1}</i><small>{slot.label}{!slot.required && " · optional"}</small></button>)}</div></div><div className="capture-actions">{cameraOn ? <><Button variant="secondary" onClick={onStopCamera} icon="x">Stop camera</Button><Button onClick={onCapture} disabled={uploading} icon="camera">{uploading ? "Uploading…" : "Capture frame"}</Button></> : <><input ref={fileInputRef} className="sr-only" type="file" aria-label={"Upload " + (current?.label ?? "current") + " scan photo"} accept="image/jpeg,image/png,image/webp" onChange={onChooseFile} /><Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={uploading} icon="upload">{uploading ? "Uploading…" : "Upload image"}</Button><Button variant="ghost" onClick={onStartCamera} disabled={uploading} icon="camera">Use camera</Button></>}</div></div></Panel><div className="capture-side"><Panel className="capture-next"><p className="eyebrow">NEXT STEP</p><h3>{requiredReady ? "Front and side are ready." : `Add the ${nextSlot?.label.toLowerCase() ?? "next"} view.`}</h3><p>{requiredReady ? "Submit now, or add an optional back view for your tailor." : "Front and side are required. A back view is optional and can be added for extra review context."}</p><Button onClick={onContinue} disabled={busy || uploading || !requiredReady} icon="arrow-right">{busy ? "Submitting…" : "Submit photos"}</Button></Panel><Panel className="capture-quality"><p className="eyebrow">PHOTO CHECKLIST</p><div className="quality-list"><span><Icon name="check" size={14} /> JPG, PNG, or WebP</span><span><Icon name="check" size={14} /> Maximum 10 MB each</span><span><Icon name="lock" size={14} /> Stored privately</span></div><div className="uploaded-list">{captures.map((slot, index) => <div key={slot.key}><span className={slot.captured ? "uploaded" : "not-uploaded"}><Icon name={slot.captured ? "check" : "clock"} size={12} /></span><span><strong>{slot.label}{!slot.required && " · optional"}</strong><small>{slot.captured ? "Uploaded" : slot.required ? "Required" : "Optional"}</small></span>{slot.captured && <button type="button" className="icon-button" aria-label={`Remove ${slot.label} view`} onClick={() => void onRemove(index)}><Icon name="x" size={14} /></button>}</div>)}</div></Panel></div></div>;
+}
+
+function processingStageLabel(stage: ProcessingStage): string {
+  return {
+    queued: "Queued",
+    validating: "Validating photos",
+    processing: "Fitting body model",
+    completed: "Completed",
+    failed: "Failed",
+  }[stage];
+}
+
+function processingStageForScan(scan: Scan | null): ProcessingStage {
+  const stored = scan?.processing_status;
+  if (stored) return stored;
+  if (scan?.status === "failed") return "failed";
+  if (scan?.status === "ready_for_review" || scan?.status === "verified") return "completed";
+  if (scan?.status === "processing") return "processing";
+  return "queued";
 }
 
 function ScanProcessing({ scanId, initialMessage, onBack, onResults }: { scanId: string; initialMessage: string; onBack: () => void; onResults: () => void }) {
@@ -1244,14 +1298,22 @@ function ScanProcessing({ scanId, initialMessage, onBack, onResults }: { scanId:
   const [error, setError] = useState("");
   const [serviceMessage, setServiceMessage] = useState(initialMessage);
   const [requesting, setRequesting] = useState(false);
+  const [serviceUnavailable, setServiceUnavailable] = useState(false);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
-  const refresh = async () => {
-    const next = await getScanBundle(scanId);
-    if (!mountedRef.current) return;
+
+  const applyBundle = (next: ScanBundle) => {
     setBundle(next);
     if (next.scan.status === "ready_for_review" || next.scan.status === "verified") onResults();
   };
+
+  const refresh = async (): Promise<ScanBundle | null> => {
+    const next = await getScanBundle(scanId);
+    if (!mountedRef.current) return null;
+    applyBundle(next);
+    return next;
+  };
+
   useEffect(() => {
     const unsubscribe = subscribeToNodeScan(scanId, (event) => {
       if (!mountedRef.current) return;
@@ -1259,54 +1321,89 @@ function ScanProcessing({ scanId, initialMessage, onBack, onResults }: { scanId:
       void refresh().catch((reason: unknown) => {
         if (mountedRef.current) setError(readableError(reason));
       });
+    }, (message) => {
+      // Socket updates are an enhancement. Keep polling the durable record if
+      // the websocket is unavailable instead of treating it as a scan failure.
+      if (mountedRef.current && !message.toLowerCase().includes("unauthorized")) setError("");
     });
     return unsubscribe;
   }, [scanId]);
+
   useEffect(() => {
     let active = true;
-    const loadAndKickQueuedScan = async () => {
+    const loadAndKickPendingScan = async () => {
       const next = await getScanBundle(scanId);
       if (!active || !mountedRef.current) return;
-      setBundle(next);
-      if (next.scan.status === "ready_for_review" || next.scan.status === "verified") {
-        onResults();
-        return;
-      }
-      if (next.scan.status !== "processing_queued") return;
+      applyBundle(next);
+      const stage = processingStageForScan(next.scan);
+      if (next.scan.status === "ready_for_review" || next.scan.status === "verified") return;
+      // Only a durable queued job is kicked here. A validating/processing job
+      // may already be running after a page refresh and must not be duplicated.
+      if (stage !== "queued") return;
       const result = await requestScanProcessing(scanId);
       if (!active || !mountedRef.current) return;
+      setServiceUnavailable(result.status === "unavailable");
       setServiceMessage(result.message);
       await refresh();
     };
-    void loadAndKickQueuedScan().catch((reason: unknown) => { if (active) setError(readableError(reason)); });
+    void loadAndKickPendingScan().catch((reason: unknown) => { if (active) setError(readableError(reason)); });
     return () => { active = false; };
   }, [scanId]);
+
   useEffect(() => {
-    if (!bundle || !["processing_queued", "processing"].includes(bundle.scan.status)) return undefined;
-    const interval = window.setInterval(() => { void refresh().catch((reason: unknown) => { if (mountedRef.current) setError(readableError(reason)); }); }, 5000);
+    if (!bundle) return undefined;
+    const stage = processingStageForScan(bundle.scan);
+    if (!(["queued", "validating", "processing"] as ProcessingStage[]).includes(stage)) return undefined;
+    const interval = window.setInterval(() => {
+      void refresh().catch((reason: unknown) => { if (mountedRef.current) setError(readableError(reason)); });
+    }, 900);
     return () => window.clearInterval(interval);
-  }, [bundle?.scan.status, scanId]);
+  }, [bundle?.scan.processing_status, bundle?.scan.status, scanId]);
+
   const retry = async () => {
     setRequesting(true);
     setError("");
+    setServiceUnavailable(false);
     try {
       const result = await requestScanProcessing(scanId);
-      if (mountedRef.current) setServiceMessage(result.message);
+      if (mountedRef.current) {
+        setServiceUnavailable(result.status === "unavailable");
+        setServiceMessage(result.message);
+      }
       await refresh();
-    } catch (reason: unknown) { if (mountedRef.current) setError(readableError(reason)); } finally { if (mountedRef.current) setRequesting(false); }
+    } catch (reason: unknown) {
+      if (mountedRef.current) setError(readableError(reason));
+    } finally {
+      if (mountedRef.current) setRequesting(false);
+    }
   };
-  const status = bundle?.scan.status ?? "processing_queued";
-  const copy = processingCopy(status);
-  const unavailable = serviceMessage.toLowerCase().includes("unavailable");
-  const localMode = bundle?.scan.processing_provider === "local";
-  const progressLevel = unavailable || status === "failed" ? "blocked" : status === "processing" ? "processing" : "queued";
-  const progressLabel = progressLevel === "blocked" ? "Processing needs your attention" : progressLevel === "processing" ? "Processing is in progress" : "Waiting to start";
+
+  const scanStage = processingStageForScan(bundle?.scan ?? null);
+  const copy = processingCopy(scanStage);
+  const unavailable = serviceUnavailable;
+  const failed = scanStage === "failed";
+  const rawProgress = bundle?.scan.processing_progress;
+  const parsedProgress = rawProgress === null || rawProgress === undefined ? null : Number(rawProgress);
+  const progress = parsedProgress !== null && Number.isFinite(parsedProgress) ? Math.min(100, Math.max(0, Math.round(parsedProgress))) : null;
+  const progressReported = progress !== null && bundle?.scan.processing_progress_reported === true;
+  const progressLevel = unavailable || failed ? "blocked" : scanStage === "queued" ? "queued" : "processing";
+  const progressLabel = unavailable ? "Processing needs your attention" : failed ? "Processing stopped" : scanStage === "queued" ? "Waiting to start" : scanStage === "validating" ? "Checking your photos" : "Fitting your body model";
   const statusDetail = unavailable
     ? "The processing service is unavailable. Your photos are safe. Try again or return to your uploads."
-    : status === "processing"
-      ? "We are checking your photos. We’ll move you to review when measurements are ready."
-      : "Your photos are stored securely while processing starts. We’ll keep checking for a result.";
-  return <div className="processing-layout"><Panel className="processing-card"><div className="processing-visual" aria-hidden="true"><div className="processing-orbit orbit-one" /><div className="processing-orbit orbit-two" /><span className="processing-core"><Icon name={status === "failed" ? "info" : unavailable ? "clock" : "spark"} size={29} /></span><span className="processing-marker marker-one" /><span className="processing-marker marker-two" /><span className="processing-marker marker-three" /></div><div className="processing-copy"><div className="processing-heading"><Badge tone={status === "failed" ? "danger" : unavailable ? "warning" : status === "processing" ? "blue" : "teal"} dot>{status === "failed" ? "FAILED" : unavailable ? "SERVICE UNAVAILABLE" : status === "processing" ? "PROCESSING" : "QUEUED"}</Badge><span>Step 04 of 05</span></div><p className="eyebrow">STEP 04 · PROCESSING</p><h2>{unavailable ? "Processing unavailable" : copy.title}</h2><p className="processing-status" role="status" aria-live="polite">{serviceMessage || copy.body}</p><div className={cn("processing-status-card", progressLevel === "blocked" ? "blocked" : progressLevel === "processing" ? "active" : "queued")} role="status" aria-live="polite"><span className="processing-status-dot" aria-hidden="true" /><div><strong>{progressLabel}</strong><span>{statusDetail}</span></div></div>{status === "failed" && <p className="processing-failure">{bundle?.scan.failure_reason ?? "The processing service did not return a valid result."}</p>}<div className="processing-actions"><Button variant="secondary" onClick={onBack} icon="arrow-left">Back to uploads</Button>{status === "failed" || unavailable ? <Button onClick={() => void retry()} disabled={requesting} icon="refresh">{requesting ? "Retrying…" : "Try processing again"}</Button> : <Button variant="ghost" onClick={() => void refresh()} icon="refresh">Check status</Button>}</div></div></Panel><Panel className="processing-details"><div className="detail-line"><Icon name="lock" size={18} /><span><strong>Photos stored privately</strong><small>Signed access is used for authorized processing and review.</small></span></div><div className="detail-line"><Icon name="target" size={18} /><span><strong>{localMode ? "Demo result clearly labeled" : "No invented results"}</strong><small>{localMode ? "The local simulator is illustrative; a dressmaker must verify the estimates." : "Measurements appear only after provider validation."}</small></span></div><div className="detail-line"><Icon name="clock" size={18} /><span><strong>Current status</strong><small>{scanStatusLabel(status)} · last checked {formatDateTime(bundle?.scan.updated_at)}</small></span></div>{error && <InlineError message={error} />}</Panel></div>;
+    : failed
+      ? "No measurements were saved from this attempt. Read the message and try again after fixing the issue."
+      : scanStage === "queued"
+        ? "Your photos are stored securely while the processing worker starts."
+        : scanStage === "validating"
+          ? "We are checking that both required views contain one complete body."
+          : "The CPU worker is fitting the body and validating the GLB before review.";
+  const queuedMessage = serviceMessage.toLowerCase();
+  const shouldUseServiceMessage = Boolean(serviceMessage) && (scanStage === "queued" || (!queuedMessage.includes("queued") && !queuedMessage.includes("accepted")));
+  const displayedMessage = unavailable ? serviceMessage : failed ? (bundle?.scan.processing_error ?? bundle?.scan.failure_reason ?? serviceMessage ?? copy.body) : shouldUseServiceMessage ? serviceMessage : copy.body;
+  const badgeLabel = unavailable ? "SERVICE UNAVAILABLE" : failed ? "FAILED" : scanStage === "queued" ? "QUEUED" : scanStage === "validating" ? "VALIDATING" : "PROCESSING";
+  const badgeTone = failed ? "danger" : unavailable ? "warning" : scanStage === "queued" ? "teal" : "blue";
+  const localMode = bundle?.scan.processing_provider === "local";
+  return <div className="processing-layout"><Panel className="processing-card"><div className="processing-visual" aria-hidden="true"><div className="processing-orbit orbit-one" /><div className="processing-orbit orbit-two" /><span className="processing-core"><Icon name={failed ? "info" : unavailable ? "clock" : "spark"} size={29} /></span><span className="processing-marker marker-one" /><span className="processing-marker marker-two" /><span className="processing-marker marker-three" /></div><div className="processing-copy"><div className="processing-heading"><Badge tone={badgeTone} dot>{badgeLabel}</Badge><span>Step 04 of 05</span></div><p className="eyebrow">STEP 04 · PROCESSING</p><h2>{unavailable ? "Processing unavailable" : copy.title}</h2><p className="processing-status" role="status" aria-live="polite">{displayedMessage}</p><div className={cn("processing-progress", `processing-progress-${progressLevel}`)} aria-label="Scan processing progress">{progressReported ? <div className="processing-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-valuetext={`${progress}% · ${processingStageLabel(scanStage)}`}><span style={{ width: `${progress}%` }} /></div> : <div className="processing-progress-unreported" role="status">{scanStage === "queued" ? "Waiting for provider update" : "Progress not reported by provider"}</div>}<div className="processing-progress-meta"><strong>{processingStageLabel(scanStage)}</strong><span>{progressReported ? `${progress}%` : "Not reported"}</span></div></div><div className={cn("processing-status-card", progressLevel === "blocked" ? "blocked" : progressLevel === "processing" ? "active" : "queued")} role="status" aria-live="polite"><span className="processing-status-dot" aria-hidden="true" /><div><strong>{progressLabel}</strong><span>{statusDetail}</span></div></div>{failed && <p className="processing-failure">{bundle?.scan.processing_error ?? bundle?.scan.failure_reason ?? "The processing service did not return a valid result."}</p>}<div className="processing-actions"><Button variant="secondary" onClick={onBack} icon="arrow-left">Back to uploads</Button>{failed || unavailable ? <Button onClick={() => void retry()} disabled={requesting} icon="refresh">{requesting ? "Retrying…" : "Try processing again"}</Button> : <Button variant="ghost" onClick={() => void refresh()} icon="refresh">Check status</Button>}</div></div></Panel><Panel className="processing-details"><div className="detail-line"><Icon name="lock" size={18} /><span><strong>Photos stored privately</strong><small>Signed access is used for authorized processing and review.</small></span></div><div className="detail-line"><Icon name="target" size={18} /><span><strong>{localMode ? "Legacy sample clearly labeled" : "No invented results"}</strong><small>{localMode ? "This older local record is illustrative; new scans require a configured provider." : "Measurements appear only after pose validation, Anny fitting, CLAD measurement, and GLB validation."}</small></span></div><div className="detail-line"><Icon name="clock" size={18} /><span><strong>Current status</strong><small>{processingStageLabel(scanStage)} · last checked {formatDateTime(bundle?.scan.updated_at)}</small></span></div>{error && <InlineError message={error} />}</Panel></div>;
 }
 
 const resultTabOptions: Array<{ key: "measurements" | "photos" | "activity"; label: string }> = [
@@ -1336,6 +1433,23 @@ function MeasurementHighlights({ measurements, selectedId, onSelect }: { measure
   return <div className="measurement-highlights" aria-label="Key measurements. Select one to show its guide on the model.">{highlights.map((measurement) => { const content = <><span>{displayMeasurementKey(measurement.key)}</span><strong>{displayMeasurementValue(measurement)}</strong><small>{measurementConfidenceText(measurement.confidence)}</small>{onSelect && <em>Show on model <Icon name="arrow-right" size={12} /></em>}</>; return onSelect ? <button type="button" className={cn("measurement-highlight", selectedId === measurement.id && "selected")} key={measurement.id} aria-pressed={selectedId === measurement.id} aria-label={"Show " + displayMeasurementKey(measurement.key) + " on the 3D model"} onClick={() => onSelect(measurement)}>{content}</button> : <article className="measurement-highlight" key={measurement.id}>{content}</article>; })}</div>;
 }
 
+function ResultTruthSummary({ truth }: { truth: ReturnType<typeof getScanResultTruth> }) {
+  const qualityLabel = truth.quality ? truth.quality.replace(/[-_]+/g, " ") : "Not reported";
+  return <section className="result-truth-summary" aria-label="Measurement result provenance">
+    <div className="result-truth-heading">
+      <div><p className="eyebrow">RESULT DETAILS</p><h4>What this result tells you</h4></div>
+      <Badge tone={truth.quality === "good" ? "success" : truth.quality === "poor" ? "warning" : "neutral"}>{qualityLabel}</Badge>
+    </div>
+    <dl className="result-facts result-truth-facts">
+      <div><dt>Provider</dt><dd>{truth.provider ?? "Not reported"}</dd></div>
+      <div><dt>Processing version</dt><dd className="result-fact-code">{truth.processingVersion ?? "Not reported"}</dd></div>
+      <div><dt>Processing attempt</dt><dd className="result-fact-code">{truth.attemptId ?? "Not reported"}</dd></div>
+    </dl>
+    {truth.qualityIssues.length > 0 && <div className="quality-diagnostics"><strong>Review notes</strong><ul>{truth.qualityIssues.map((issue, index) => <li key={`${qualityIssueText(issue)}-${index}`}>{qualityIssueText(issue)}</li>)}</ul></div>}
+    <p className="accuracy-disclaimer"><Icon name="info" size={15} /> No independently validated accuracy percentage is available for this scan. Confidence is shown only when the measurement provider reports it; have a dressmaker verify the result before cutting fabric.</p>
+  </section>;
+}
+
 function ScanResults({ scanId, onRecapture, onDashboard }: { scanId: string; onRecapture: () => void; onDashboard: () => void }) {
   const state = useAsyncData(() => getScanBundle(scanId, true), [scanId]);
   const bundle = state.data;
@@ -1350,6 +1464,7 @@ function ScanResults({ scanId, onRecapture, onDashboard }: { scanId: string; onR
   if (state.loading) return <LoadingState label="Loading your scan result…" />;
   if (state.error) return <ErrorState message={state.error} onRetry={state.reload} />;
   if (!bundle) return <ErrorState message="The scan record was not returned." />;
+  const resultTruth = getScanResultTruth(bundle);
   const requestRecapture = async () => {
     setActionBusy(true); setActionError("");
     try { await updateScan(scanId, { status: "needs_recapture" }); onRecapture(); } catch (reason: unknown) { setActionError(readableError(reason)); } finally { setActionBusy(false); }
@@ -1384,12 +1499,12 @@ function ScanResults({ scanId, onRecapture, onDashboard }: { scanId: string; onR
       focusTarget.focus({ preventScroll: true });
     }, 0);
   };
-  return <div className="results-layout"><Panel className="results-viewer"><div className="viewer-top"><div><p className="eyebrow">SCAN {bundle.scan.id.slice(0, 8).toUpperCase()}</p><h2>3D body model</h2><p className="viewer-subtitle">Drag the model to turn it, or select a measurement to show its guide.</p></div><StatusBadge status={bundle.scan.status} /></div><>{bundle.measurements.length > 0 ? <ModelViewer model={bundle.bodyModel} measurements={bundle.measurements} heightValue={bundle.scan.height_value} heightUnit={bundle.scan.height_unit} focusedMeasurementKey={bundle.measurements.find((measurement) => measurement.id === selectedMeasurementId)?.key ?? null} /> : <div className="model-no-result" role="status"><span className="model-empty-icon"><Icon name="ruler" size={25} /></span><h3>Your model will appear here</h3><p>Measurements will show after processing returns a valid result.</p></div>}</><div className="viewer-note"><Icon name="lock" size={14} /> Model assets are available only through authorized access.</div></Panel><Panel className="results-panel"><div className="results-summary"><span className="result-summary-icon"><Icon name="ruler" size={23} /></span><div className="results-summary-content"><div className="results-summary-heading"><Badge tone={localDemo ? "warning" : "teal"} dot>{bundle.measurements.length > 0 ? localDemo ? "SAMPLE RESULT" : "MEASUREMENT RESULT" : "RESULT PENDING"}</Badge><span>{bundle.measurements.length} measurements</span></div><h3>{bundle.measurements.length > 0 ? localDemo ? "Sample measurements are ready" : "Measurements are ready to check" : "No measurements yet"}</h3><p>{bundle.measurements.length > 0 ? localDemo ? "These are sample measurements. Have a dressmaker check them before tailoring." : "Check the measurements below before sending them to your dressmaker." : "Measurements are not ready yet. The service has not returned a valid result for this scan."}</p></div></div>{bundle.measurements.length > 0 && <MeasurementHighlights measurements={bundle.measurements} selectedId={selectedMeasurementId} onSelect={focusMeasurement} />}<p className="measurement-selection-hint"><Icon name="info" size={15} /> Select any measurement row to show its guide on the model.</p><div className="results-tabs" role="tablist" aria-label="Scan result details">{resultTabOptions.map((option, index) => <button key={option.key} id={`${tabsId}-${option.key}`} type="button" role="tab" aria-selected={tab === option.key} aria-controls={panelId} tabIndex={tab === option.key ? 0 : -1} className={tab === option.key ? "active" : ""} onClick={() => setTab(option.key)} onKeyDown={(event) => onTabKeyDown(event, index)}>{option.label}</button>)}</div><div id={panelId} role="tabpanel" tabIndex={0} aria-labelledby={`${tabsId}-${tab}`} className="results-tab-panel">{tab === "measurements" && <>{bundle.measurements.length === 0 ? <DataState icon="ruler" title="Waiting for measurements" body="This area will fill after the service returns a checked measurement result." /> : <><dl className="result-facts"><div><dt>Measurements</dt><dd>{bundle.measurements.length}</dd></div><div><dt>Height reference</dt><dd>{bundle.scan.height_value === null ? "Not provided" : `${bundle.scan.height_value} ${bundle.scan.height_unit === "cm" ? "cm" : "in"}`}</dd></div><div><dt>Average confidence</dt><dd>{averageConfidence !== null && Number.isFinite(averageConfidence) ? measurementConfidenceText(averageConfidence) : "Not reported"}</dd></div></dl><MeasurementTable measurements={bundle.measurements} selectedId={selectedMeasurementId} onSelect={focusMeasurement} /></>}</>}{tab === "photos" && <PrivatePhotos assets={bundle.assets} />}{tab === "activity" && <ScanActivity scan={bundle.scan} />}</div></Panel><div className="results-actions"><div className="results-action-meta"><span className="action-tip"><Icon name="shield" size={15} /> Check before sharing</span><span className="action-tip"><Icon name="clock" size={15} /> Updated {formatDate(bundle.scan.updated_at)}</span></div><div className="result-action-error">{actionError && <InlineError message={actionError} />}</div><div className="result-buttons"><Button onClick={() => void sendToReview()} disabled={actionBusy || bundle.measurements.length === 0 || reviewSent} icon="arrow-right">{reviewSent ? "Sent to dressmaker" : "Send to dressmaker for review"}</Button><Button variant="secondary" onClick={() => void requestRecapture()} disabled={actionBusy} icon="refresh">Request new photos</Button><Button variant="ghost" onClick={onDashboard}>Back to overview</Button></div></div></div>;
+  return <div className="results-layout"><Panel className="results-viewer"><div className="viewer-top"><div><p className="eyebrow">SCAN {bundle.scan.id.slice(0, 8).toUpperCase()}</p><h2>3D body model</h2><p className="viewer-subtitle">Drag the model to turn it, or select a measurement to show its guide.</p></div><StatusBadge status={bundle.scan.status} /></div><>{bundle.measurements.length > 0 ? <ModelViewer model={bundle.bodyModel} measurements={bundle.measurements} heightValue={bundle.scan.height_value} heightUnit={bundle.scan.height_unit} focusedMeasurementKey={bundle.measurements.find((measurement) => measurement.id === selectedMeasurementId)?.key ?? null} onSelectMeasurement={focusMeasurement} /> : <div className="model-no-result" role="status"><span className="model-empty-icon"><Icon name="ruler" size={25} /></span><h3>Your model will appear here</h3><p>Measurements will show after processing returns a valid result.</p></div>}</><div className="viewer-note"><Icon name="lock" size={14} /> Model assets are available only through authorized access.</div></Panel><Panel className="results-panel"><ResultTruthSummary truth={resultTruth} /><div className="results-summary"><span className="result-summary-icon"><Icon name="ruler" size={23} /></span><div className="results-summary-content"><div className="results-summary-heading"><Badge tone={localDemo ? "warning" : "teal"} dot>{bundle.measurements.length > 0 ? localDemo ? "SAMPLE RESULT" : "MEASUREMENT RESULT" : "RESULT PENDING"}</Badge><span>{bundle.measurements.length} measurements</span></div><h3>{bundle.measurements.length > 0 ? localDemo ? "Sample measurements are ready" : "Measurements are ready to check" : "No measurements yet"}</h3><p>{bundle.measurements.length > 0 ? localDemo ? "These are sample measurements. Have a dressmaker check them before tailoring." : "Check the measurements below before sending them to your dressmaker." : "Measurements are not ready yet. The service has not returned a valid result for this scan."}</p></div></div>{bundle.measurements.length > 0 && <MeasurementHighlights measurements={bundle.measurements} selectedId={selectedMeasurementId} onSelect={focusMeasurement} />}<p className="measurement-selection-hint"><Icon name="info" size={15} /> Select any measurement row to show its guide on the model.</p><div className="results-tabs" role="tablist" aria-label="Scan result details">{resultTabOptions.map((option, index) => <button key={option.key} id={`${tabsId}-${option.key}`} type="button" role="tab" aria-selected={tab === option.key} aria-controls={panelId} tabIndex={tab === option.key ? 0 : -1} className={tab === option.key ? "active" : ""} onClick={() => setTab(option.key)} onKeyDown={(event) => onTabKeyDown(event, index)}>{option.label}</button>)}</div><div id={panelId} role="tabpanel" tabIndex={0} aria-labelledby={`${tabsId}-${tab}`} className="results-tab-panel">{tab === "measurements" && <>{bundle.measurements.length === 0 ? <DataState icon="ruler" title="Waiting for measurements" body="This area will fill after the service returns a checked measurement result." /> : <><dl className="result-facts"><div><dt>Measurements</dt><dd>{bundle.measurements.length}</dd></div><div><dt>Height reference</dt><dd>{bundle.scan.height_value === null ? "Not provided" : `${bundle.scan.height_value} ${bundle.scan.height_unit === "cm" ? "cm" : "in"}`}</dd></div><div><dt>Average confidence</dt><dd>{averageConfidence !== null && Number.isFinite(averageConfidence) ? measurementConfidenceText(averageConfidence) : "Not reported"}</dd></div></dl><MeasurementTable measurements={bundle.measurements} selectedId={selectedMeasurementId} onSelect={focusMeasurement} /></>}</>}{tab === "photos" && <PrivatePhotos assets={bundle.assets} />}{tab === "activity" && <ScanActivity scan={bundle.scan} />}</div></Panel><div className="results-actions"><div className="results-action-meta"><span className="action-tip"><Icon name="shield" size={15} /> Check before sharing</span><span className="action-tip"><Icon name="clock" size={15} /> Updated {formatDate(bundle.scan.updated_at)}</span></div><div className="result-action-error">{actionError && <InlineError message={actionError} />}</div><div className="result-buttons"><Button onClick={() => void sendToReview()} disabled={actionBusy || bundle.measurements.length === 0 || reviewSent} icon="arrow-right">{reviewSent ? "Sent to dressmaker" : "Send to dressmaker for review"}</Button><Button variant="secondary" onClick={() => void requestRecapture()} disabled={actionBusy} icon="refresh">Request new photos</Button><Button variant="ghost" onClick={onDashboard}>Back to overview</Button></div></div></div>;
 }
 
 function MeasurementTable({ measurements, editable = false, values, onValueChange, selectedId, onSelect }: { measurements: Measurement[]; editable?: boolean; values?: Record<string, string>; onValueChange?: (id: string, value: string) => void; selectedId?: string | null; onSelect?: (measurement: Measurement) => void }) {
   const selectable = Boolean(onSelect);
-  return <div className="measurement-table-wrap"><table className="measurement-table"><caption className="sr-only">Body measurements and confidence. Select a measurement name to highlight its guide on the 3D model.</caption><thead><tr><th scope="col">Measurement</th><th scope="col">Value</th><th scope="col">Confidence</th></tr></thead><tbody>{measurements.map((measurement) => {
+  return <div className="measurement-table-wrap"><table className="measurement-table"><caption className="sr-only">Body measurements, provider method, source, and confidence. Select a measurement name to highlight its guide on the 3D model.</caption><thead><tr><th scope="col">Measurement</th><th scope="col">Value</th><th scope="col">Confidence</th></tr></thead><tbody>{measurements.map((measurement) => {
     const selected = selectedId === measurement.id;
     const rowSelectable = selectable && measurementGuideKey(measurement.key) !== null;
     const label = displayMeasurementKey(measurement.key);
@@ -1404,7 +1519,8 @@ function MeasurementTable({ measurements, editable = false, values, onValueChang
       event.preventDefault();
       select();
     };
-    return <tr id={"measurement-row-" + measurement.id} className={cn("measurement-row", selected && "selected")} key={measurement.id} data-selectable={rowSelectable ? "true" : undefined} tabIndex={rowSelectable ? 0 : undefined} aria-selected={rowSelectable ? selected : undefined} aria-disabled={selectable && !rowSelectable ? true : undefined} onClick={rowSelectable ? handleRowClick : undefined} onKeyDown={rowSelectable ? handleKeyDown : undefined}><th scope="row">{rowSelectable ? <button type="button" className="measurement-name-button" aria-label={"Show " + label + " on the 3D model"} aria-controls="model-3d-region" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); select(); }}><span className="table-accent" aria-hidden="true" />{label}</button> : <span className="measurement-name"><span className="table-accent" aria-hidden="true" />{label}</span>}</th><td>{editable ? <div className="adjust-input"><input aria-label={label + " adjusted value"} inputMode="decimal" value={values?.[measurement.id] ?? String(measurement.adjusted_value ?? measurement.value)} onChange={(event) => onValueChange?.(measurement.id, event.target.value)} /><span aria-hidden="true">{measurement.unit}</span></div> : <strong>{displayMeasurementValue(measurement)}</strong>}</td><td><span className={cn("confidence-value", "confidence-" + confidence.tone)}><strong>{confidence.label}</strong>{measurement.confidence !== null && Number.isFinite(measurement.confidence) && <small>{measurement.confidence.toFixed(0)}%</small>}</span></td></tr>;
+    const provenance = measurementProvenance(measurement);
+    return <tr id={"measurement-row-" + measurement.id} className={cn("measurement-row", selected && "selected")} key={measurement.id} data-selectable={rowSelectable ? "true" : undefined} tabIndex={rowSelectable ? 0 : undefined} aria-selected={rowSelectable ? selected : undefined} aria-disabled={selectable && !rowSelectable ? true : undefined} onClick={rowSelectable ? handleRowClick : undefined} onKeyDown={rowSelectable ? handleKeyDown : undefined}><th scope="row">{rowSelectable ? <button type="button" className="measurement-name-button" aria-label={"Show " + label + " on the 3D model"} aria-controls="model-3d-region" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); select(); }}><span className="table-accent" aria-hidden="true" />{label}<small className="measurement-provenance">{provenance}</small></button> : <span className="measurement-name"><span className="table-accent" aria-hidden="true" />{label}<small className="measurement-provenance">{provenance}</small></span>}</th><td>{editable ? <div className="adjust-input"><input aria-label={label + " adjusted value"} inputMode="decimal" value={values?.[measurement.id] ?? String(measurement.adjusted_value ?? measurement.value)} onChange={(event) => onValueChange?.(measurement.id, event.target.value)} /><span aria-hidden="true">{measurement.unit}</span></div> : <strong>{displayMeasurementValue(measurement)}</strong>}</td><td><span className={cn("confidence-value", "confidence-" + confidence.tone)}><strong>{confidence.label}</strong>{measurement.confidence !== null && Number.isFinite(measurement.confidence) && <small>{measurement.confidence.toFixed(0)}%</small>}</span></td></tr>;
   })}</tbody></table></div>;
 }
 
@@ -1416,7 +1532,7 @@ function PrivatePhotos({ assets }: { assets: ScanAsset[] }) {
 function ScanActivity({ scan }: { scan: Scan }) {
   const events: Array<{ title: string; body: string; date: string | null; done: boolean }> = [
     { title: "Scan created", body: "A private scan draft was created.", date: scan.created_at, done: true },
-    { title: "Views uploaded", body: scan.status === "draft" ? "Waiting for front, side, and back views." : "The required views are attached to this scan.", date: scan.status === "draft" ? null : scan.updated_at, done: scan.status !== "draft" },
+    { title: "Views uploaded", body: scan.status === "draft" ? "Waiting for the required front and side views." : "The required views are attached to this scan.", date: scan.status === "draft" ? null : scan.updated_at, done: scan.status !== "draft" },
     { title: "Provider result", body: scanStatusLabel(scan.status), date: ["ready_for_review", "verified", "needs_recapture"].includes(scan.status) ? scan.updated_at : null, done: ["ready_for_review", "verified", "needs_recapture"].includes(scan.status) },
   ];
   return <div className="activity-list">{events.map((event) => <div className={cn("activity-item", event.done && "done")} key={event.title}><span><Icon name={event.done ? "check" : "clock"} size={13} /></span><div><strong>{event.title}</strong><p>{event.body}</p></div><small>{formatDateTime(event.date)}</small></div>)}</div>;
@@ -1434,6 +1550,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function localPreviewData(model: ScanBundle["bodyModel"]): LocalPreviewData | null {
   if (!model || model.status !== "ready" || model.provider !== "local" || !isRecord(model.preview_data)) return null;
   return model.preview_data.kind === "local-reference-3d-body-scan" ? model.preview_data : null;
+}
+
+function personalizedGuideFractions(model: ScanBundle["bodyModel"]): Record<string, number> {
+  if (!model || !isRecord(model.preview_data)) return {};
+  const reconstruction = isRecord(model.preview_data.reconstruction) ? model.preview_data.reconstruction : model.preview_data;
+  const rawFractions = isRecord(reconstruction.guide_fractions) ? reconstruction.guide_fractions : {};
+  return Object.fromEntries(Object.entries(rawFractions).filter(([, value]) => typeof value === "number" && Number.isFinite(value))) as Record<string, number>;
+}
+
+type ProviderGuideContour = {
+  levelFraction: number;
+  levelHeightCm: number;
+  points: Array<[number, number, number]>;
+  source: string;
+};
+
+function personalizedGuideGeometry(model: ScanBundle["bodyModel"]): Record<string, ProviderGuideContour> {
+  if (!model || !isRecord(model.preview_data)) return {};
+  const reconstruction = isRecord(model.preview_data.reconstruction) ? model.preview_data.reconstruction : model.preview_data;
+  const rawGeometry = reconstruction.guide_geometry;
+  if (!isRecord(rawGeometry) || rawGeometry.coordinate_system !== "glb-y-up-right-handed" || rawGeometry.units !== "m" || rawGeometry.up_axis !== "y") return {};
+  const calibratedHeight = Number(rawGeometry.calibrated_height_cm);
+  if (!Number.isFinite(calibratedHeight) || calibratedHeight <= 0 || calibratedHeight > 500 || !isRecord(rawGeometry.contours)) return {};
+  const geometry: Record<string, ProviderGuideContour> = {};
+  for (const [key, rawContour] of Object.entries(rawGeometry.contours)) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(key) || !isRecord(rawContour)) continue;
+    const levelFraction = Number(rawContour.level_fraction);
+    const levelHeightCm = Number(rawContour.level_height_cm);
+    const rawPoints = rawContour.points;
+    const source = typeof rawContour.source === "string" ? rawContour.source.trim() : "";
+    if (!Number.isFinite(levelFraction) || levelFraction <= 0.05 || levelFraction >= 0.99 || !Number.isFinite(levelHeightCm) || levelHeightCm <= 0 || levelHeightCm > calibratedHeight || Math.abs(levelHeightCm - levelFraction * calibratedHeight) > Math.max(0.25, calibratedHeight * 0.01) || !source || source.length > 120 || !Array.isArray(rawPoints) || rawPoints.length < 8 || rawPoints.length > 2048) continue;
+    const points: Array<[number, number, number]> = [];
+    for (const rawPoint of rawPoints) {
+      if (!Array.isArray(rawPoint) || rawPoint.length !== 3 || rawPoint.some((coordinate) => typeof coordinate !== "number" || !Number.isFinite(coordinate) || Math.abs(coordinate) > 100)) {
+        points.length = 0;
+        break;
+      }
+      points.push([rawPoint[0], rawPoint[1], rawPoint[2]]);
+    }
+    if (points.length >= 8) geometry[key] = { levelFraction, levelHeightCm, points, source };
+  }
+  return geometry;
 }
 
 function localPreviewPath(value: unknown): string | null {
@@ -1665,6 +1823,28 @@ function addMeasuredEllipseGuide(three: ThreeModule, group: THREE.Group, center:
   group.add(line);
 }
 
+function addMeasuredContourGuide(three: ThreeModule, group: THREE.Group, points: THREE.Vector3[], color: number, key?: string, aliases: string[] = []) {
+  if (points.length < 8) return;
+  const center = points.reduce((sum, point) => sum.add(point), new three.Vector3()).multiplyScalar(1 / points.length);
+  const lifted = points.map((point) => {
+    const radial = new three.Vector3(point.x - center.x, 0, point.z - center.z);
+    if (radial.lengthSq() > 0) radial.normalize().multiplyScalar(0.0025);
+    return point.clone().add(radial);
+  });
+  const line = new three.LineLoop(
+    new three.BufferGeometry().setFromPoints(lifted),
+    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.98, depthTest: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+  );
+  line.renderOrder = 4;
+  line.frustumCulled = false;
+  line.userData.guideColor = color;
+  if (key) {
+    line.userData.measurementKey = key;
+    line.userData.measurementKeys = [key, ...aliases];
+  }
+  group.add(line);
+}
+
 function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, start: THREE.Vector3, end: THREE.Vector3, radii: LimbRadii, color: number, key?: string, aliases: string[] = []) {
   const axis = new three.Vector3().subVectors(end, start).normalize();
   const reference = Math.abs(axis.y) < 0.9 ? new three.Vector3(0, 1, 0) : new three.Vector3(1, 0, 0);
@@ -1687,6 +1867,79 @@ function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: TH
     line.userData.measurementKeys = [key, ...aliases];
   }
   group.add(line);
+}
+
+type PersonalizedRingSpec = {
+  key: string;
+  aliases: string[];
+  color: number;
+};
+
+const personalizedRingSpecs: PersonalizedRingSpec[] = [
+  { key: "head", aliases: ["head_circumference"], color: 0x72e56f },
+  { key: "neck", aliases: ["neck_circumference"], color: 0x9e9cff },
+  { key: "chest", aliases: ["bust", "chest_circumference"], color: 0x60e8d7 },
+  { key: "waist", aliases: ["waist_circumference"], color: 0x71dbe6 },
+  { key: "hip", aliases: ["hips", "hip_circumference"], color: 0xf1d33b },
+];
+
+const personalizedTorsoGuideKeys = new Set(personalizedRingSpecs.map((spec) => spec.key));
+
+const personalizedCircumferenceGuideKeys = new Set([
+  "head", "neck", "chest", "waist", "hip", "upper_arm_left", "upper_arm_right", "forearm_left", "forearm_right",
+  "wrist_left", "wrist_right", "thigh_left", "thigh_right", "calf_left", "calf_right", "ankle_left", "ankle_right",
+]);
+
+function returnedMeasurementMatches(measurements: Measurement[], keys: string[]): boolean {
+  return measurements.some((measurement) => measurementGuideMatches(measurement.key, keys));
+}
+
+function hideUnreturnedPersonalizedGuides(guides: THREE.Group, measurements: Measurement[]): void {
+  guides.traverse((object) => {
+    const key = object.userData.measurementKey;
+    if (typeof key !== "string") return;
+    // The procedural torso ellipses are only a fallback for the preview body.
+    // A personalized GLB gets one contour extracted from its actual surface;
+    // keeping both guides creates visibly offset/doubled rings.
+    if (personalizedTorsoGuideKeys.has(key)) {
+      object.visible = false;
+      return;
+    }
+    if (!personalizedCircumferenceGuideKeys.has(key)) return;
+    const aliases = (object.userData.measurementKeys as string[] | undefined) ?? [key];
+    object.visible = returnedMeasurementMatches(measurements, aliases);
+  });
+}
+
+function addPersonalizedRingGuides(three: ThreeModule, guides: THREE.Group, model: THREE.Object3D, measurements: Measurement[], guideFractions: Record<string, number>, guideGeometry: Record<string, ProviderGuideContour>): void {
+  model.updateMatrixWorld(true);
+  const bounds = new three.Box3().setFromObject(model);
+  const height = bounds.max.y - bounds.min.y;
+  if (!Number.isFinite(height) || height <= 0) return;
+  hideUnreturnedPersonalizedGuides(guides, measurements);
+  const modelCenter = bounds.getCenter(new three.Vector3());
+  for (const spec of personalizedRingSpecs) {
+    const measurementKeys = [spec.key, ...spec.aliases];
+    if (!returnedMeasurementMatches(measurements, measurementKeys)) continue;
+    const providerContour = guideGeometry[spec.key];
+    if (providerContour) {
+      const points = providerContour.points.map(([x, y, z]) => new three.Vector3(x, y, z).applyMatrix4(model.matrixWorld));
+      addMeasuredContourGuide(three, guides, points, spec.color, spec.key, spec.aliases);
+      continue;
+    }
+    const rawFraction = Number(guideFractions[spec.key]);
+    // A personalized guide must use the provider's measured level. The old
+    // hard-coded fractions placed rings at generic mannequin landmarks, which
+    // made them visibly disagree with the returned mesh and measurements.
+    if (!Number.isFinite(rawFraction) || rawFraction <= 0.05 || rawFraction >= 0.99) continue;
+    const fraction = rawFraction;
+    const y = bounds.min.y + height * fraction;
+    const planeOrigin = new three.Vector3(modelCenter.x, y, modelCenter.z);
+    const contour = extractModelPlaneContour(three, model, planeOrigin, new three.Vector3(0, 1, 0), planeOrigin);
+    if (contour) {
+      addMeasuredContourGuide(three, guides, contour, spec.color, spec.key, spec.aliases);
+    }
+  }
 }
 
 function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurement[], heightValue: number | null | undefined, heightUnit: "cm" | "ftin") {
@@ -1878,7 +2131,7 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
   return { root, body, guides };
 }
 
-function disposeThreeScene(scene: THREE.Scene) {
+function disposeThreeScene(scene: THREE.Object3D) {
   scene.traverse((object) => {
     const renderable = object as unknown as { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] };
     renderable.geometry?.dispose();
@@ -1891,7 +2144,7 @@ function disposeThreeScene(scene: THREE.Scene) {
   });
 }
 
-function InteractiveBodyModel({ referenceImage, measurements = [], heightValue = null, heightUnit = "cm", focusedMeasurementKey = null }: { referenceImage: string; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin"; focusedMeasurementKey?: string | null }) {
+function InteractiveBodyModel({ referenceImage, measurements = [], heightValue = null, heightUnit = "cm", focusedMeasurementKey = null, modelUrl = null, guideFractions = {}, guideGeometry = {}, onSelectMeasurement, onViewerStateChange }: { referenceImage: string; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin"; focusedMeasurementKey?: string | null; modelUrl?: string | null; guideFractions?: Record<string, number>; guideGeometry?: Record<string, ProviderGuideContour>; onSelectMeasurement?: (measurement: Measurement) => void; onViewerStateChange?: (state: "loading" | "ready" | "fallback") => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controlsRef = useRef<OrbitControlsType | null>(null);
   const guidesRef = useRef<THREE.Group | null>(null);
@@ -1899,6 +2152,8 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
   const reducedMotionRef = useRef(false);
   const showGuidesRef = useRef(true);
   const hasUserInteractedRef = useRef(false);
+  const onSelectMeasurementRef = useRef(onSelectMeasurement);
+  const onViewerStateChangeRef = useRef(onViewerStateChange);
   const [viewerState, setViewerState] = useState<"loading" | "ready" | "fallback">("loading");
   const [autoRotate, setAutoRotate] = useState(false);
   const [showGuides, setShowGuides] = useState(true);
@@ -1906,6 +2161,17 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
   const instructionsId = useId();
   const focusStatusId = useId();
   const measurementSignature = useMemo(() => measurements.map((measurement) => `${measurement.key}:${measurement.value}:${measurement.adjusted_value ?? ""}:${measurement.unit}`).join("|"), [measurements]);
+  const guideFractionSignature = useMemo(() => Object.entries(guideFractions).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}:${value}`).join("|"), [guideFractions]);
+  const guideGeometrySignature = useMemo(() => Object.entries(guideGeometry).sort(([left], [right]) => left.localeCompare(right)).map(([key, contour]) => `${key}:${contour.levelFraction}:${contour.levelHeightCm}:${contour.points.length}:${contour.source}`).join("|"), [guideGeometry]);
+
+  useEffect(() => {
+    onSelectMeasurementRef.current = onSelectMeasurement;
+    onViewerStateChangeRef.current = onViewerStateChange;
+  }, [onSelectMeasurement, onViewerStateChange]);
+
+  useEffect(() => {
+    onViewerStateChangeRef.current?.(viewerState);
+  }, [viewerState]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -1939,21 +2205,32 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
       try {
         const runtime = await loadThreeRuntime();
         if (!active) return;
-        const { three } = runtime;
+        const { three, GLTFLoader } = runtime;
         const isMobile = /Mobi|Android/i.test(navigator.userAgent);
-        renderer = new three.WebGLRenderer({ canvas, antialias: !isMobile, alpha: false, powerPreference: isMobile ? "low-power" : "high-performance", stencil: false });
+        const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+        const lowPowerMode = import.meta.env.VITE_WEBGL_LOW_POWER_MODE === "true"
+          || isMobile
+          || navigator.hardwareConcurrency <= 8
+          || (typeof deviceMemory === "number" && deviceMemory <= 8);
+        renderer = new three.WebGLRenderer({ canvas, antialias: !lowPowerMode, alpha: false, powerPreference: lowPowerMode ? "low-power" : "high-performance", stencil: false, depth: true });
         const handleContextLost = (event: Event) => {
           event.preventDefault();
           if (frame) { window.cancelAnimationFrame(frame); frame = 0; }
           if (active) setViewerState("fallback");
         };
+        const handleContextRestored = () => {
+          if (!active) return;
+          renderer?.resetState();
+          setViewerState("ready");
+          renderRequestRef.current?.();
+        };
         renderer.outputColorSpace = three.SRGBColorSpace;
         renderer.toneMapping = three.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.08;
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = three.PCFSoftShadowMap;
-        renderer.shadowMap.autoUpdate = false;
-        renderer.shadowMap.needsUpdate = true;
+        renderer.shadowMap.enabled = !lowPowerMode;
+        renderer.shadowMap.type = three.PCFShadowMap;
+        renderer.shadowMap.autoUpdate = !lowPowerMode;
+        renderer.shadowMap.needsUpdate = !lowPowerMode;
         renderer.setClearColor(0x07111f, 1);
         scene = new three.Scene();
         scene.fog = new three.Fog(0x07111f, 8, 15);
@@ -1980,25 +2257,29 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         scene.add(new three.HemisphereLight(0xbad6ff, 0x102438, 1.75));
         const keyLight = new three.DirectionalLight(0xffffff, 3.2);
         keyLight.position.set(3.4, 6, 5.2);
-        keyLight.castShadow = true;
-        keyLight.shadow.mapSize.set(1024, 1024);
-        keyLight.shadow.camera.near = 0.5;
-        keyLight.shadow.camera.far = 16;
-        keyLight.shadow.camera.left = -4;
-        keyLight.shadow.camera.right = 4;
-        keyLight.shadow.camera.top = 7;
-        keyLight.shadow.camera.bottom = -1;
+        keyLight.castShadow = !lowPowerMode;
+        if (!lowPowerMode) {
+          keyLight.shadow.mapSize.set(1024, 1024);
+          keyLight.shadow.camera.near = 0.5;
+          keyLight.shadow.camera.far = 16;
+          keyLight.shadow.camera.left = -4;
+          keyLight.shadow.camera.right = 4;
+          keyLight.shadow.camera.top = 7;
+          keyLight.shadow.camera.bottom = -1;
+        }
         scene.add(keyLight);
-        const fillLight = new three.PointLight(0x557fd2, 4.2, 10, 2);
+        const fillLight = new three.PointLight(0x557fd2, lowPowerMode ? 2.8 : 4.2, 10, 2);
         fillLight.position.set(-4, 3.5, 3.5);
         scene.add(fillLight);
-        const rimLight = new three.PointLight(0x25d5d0, 9, 9, 2);
-        rimLight.position.set(-3.4, 2.5, -1.6);
-        scene.add(rimLight);
+        if (!lowPowerMode) {
+          const rimLight = new three.PointLight(0x25d5d0, 9, 9, 2);
+          rimLight.position.set(-3.4, 2.5, -1.6);
+          scene.add(rimLight);
+        }
 
         const floor = new three.Mesh(new three.PlaneGeometry(10, 10), new three.MeshStandardMaterial({ color: 0x07111f, roughness: 0.95, metalness: 0.02 }));
         floor.rotation.x = -Math.PI / 2;
-        floor.receiveShadow = true;
+        floor.receiveShadow = !lowPowerMode;
         scene.add(floor);
         const grid = new three.GridHelper(8, 18, 0x2a6875, 0x173344);
         grid.position.y = 0.012;
@@ -2006,14 +2287,65 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         gridMaterial.transparent = true;
         gridMaterial.opacity = 0.52;
         scene.add(grid);
+        let personalizedModel: THREE.Object3D | null = null;
+        if (modelUrl) {
+          const loader = new GLTFLoader();
+          (loader as unknown as { setWithCredentials?: (value: boolean) => void }).setWithCredentials?.(true);
+          const gltf = await loader.loadAsync(modelUrl);
+          if (!active) {
+            disposeThreeScene(gltf.scene);
+            return;
+          }
+          personalizedModel = gltf.scene;
+        }
         const bodyScene = createMeasuredBodyModelScene(three, measurements, heightValue, heightUnit);
         guidesRef.current = bodyScene.guides;
         bodyScene.guides.visible = showGuidesRef.current;
-        scene.add(bodyScene.root);
+        let fitObject: THREE.Object3D = bodyScene.body;
+        let frameObject: THREE.Object3D = bodyScene.root;
+        if (personalizedModel) {
+          const initialBounds = new three.Box3().setFromObject(personalizedModel);
+          const initialSize = initialBounds.getSize(new three.Vector3());
+          // Older local provider outputs were Z-up while the viewer and new
+          // exports are Y-up. Detect the unambiguous legacy shape and orient it
+          // before sizing so existing saved models do not render as a close-up
+          // torso. A normal human Y-up model has its largest extent on Y.
+          const legacyZUp = initialSize.z > initialSize.y * 1.25 && initialSize.z > initialSize.x * 1.05;
+          if (legacyZUp) {
+            personalizedModel.rotation.x = -Math.PI / 2;
+            personalizedModel.updateMatrixWorld(true);
+          }
+          const sourceBounds = new three.Box3().setFromObject(personalizedModel);
+          const sourceSize = sourceBounds.getSize(new three.Vector3());
+          if (!Number.isFinite(sourceSize.y) || sourceSize.y <= 0) {
+            disposeThreeScene(personalizedModel);
+            throw new Error("The personalized model has no measurable height.");
+          }
+          const sourceCenter = sourceBounds.getCenter(new three.Vector3());
+          const targetHeight = clampNumber(modelHeightCm(heightValue, heightUnit), 120, 230) * MODEL_UNITS_PER_CM;
+          const modelScale = targetHeight / sourceSize.y;
+          personalizedModel.scale.setScalar(modelScale);
+          personalizedModel.position.set(-sourceCenter.x * modelScale, -sourceBounds.min.y * modelScale, -sourceCenter.z * modelScale);
+          personalizedModel.traverse((object) => {
+            const mesh = object as THREE.Mesh;
+            if (mesh.isMesh) {
+              mesh.castShadow = !lowPowerMode;
+              mesh.receiveShadow = !lowPowerMode;
+            }
+          });
+          scene.add(personalizedModel);
+          scene.add(bodyScene.guides);
+          addPersonalizedRingGuides(three, bodyScene.guides, personalizedModel, measurements, guideFractions, guideGeometry);
+          disposeThreeScene(bodyScene.body);
+          fitObject = personalizedModel;
+          frameObject = personalizedModel;
+        } else {
+          scene.add(bodyScene.root);
+        }
         const fitCameraToModel = () => {
           if (!renderer || !controls) return;
-          const bodyBounds = new three.Box3().setFromObject(bodyScene.body);
-          const frameBounds = new three.Box3().setFromObject(bodyScene.root);
+          const bodyBounds = new three.Box3().setFromObject(fitObject);
+          const frameBounds = new three.Box3().setFromObject(frameObject);
           const size = bodyBounds.getSize(new three.Vector3());
           const frameSize = frameBounds.getSize(new three.Vector3());
           const center = bodyBounds.getCenter(new three.Vector3());
@@ -2033,13 +2365,53 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         const onControlsStart = () => { hasUserInteractedRef.current = true; };
         controls.addEventListener("start", onControlsStart);
 
+        const raycaster = new three.Raycaster();
+        raycaster.params.Line.threshold = Math.max(0.06, modelHeight * 0.035);
+        let pointerStart: { x: number; y: number } | null = null;
+        const guideAtPointer = (event: PointerEvent) => {
+          if (!showGuidesRef.current || event.button !== 0 || !guidesRef.current) return;
+          const rect = canvas.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          const pointer = new three.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1,
+          );
+          raycaster.setFromCamera(pointer, camera);
+          const guideObjects: THREE.Object3D[] = [];
+          guidesRef.current.traverse((object) => {
+            if (object.visible && typeof object.userData.measurementKey === "string") guideObjects.push(object);
+          });
+          const hit = raycaster.intersectObjects(guideObjects, true)[0];
+          if (!hit) return;
+          let target: THREE.Object3D | null = hit.object;
+          while (target && typeof target.userData.measurementKey !== "string") target = target.parent;
+          const guideKey = typeof target?.userData.measurementKey === "string" ? target.userData.measurementKey : null;
+          const guideKeys = target?.userData.measurementKeys as string[] | undefined;
+          if (!guideKey) return;
+          const measurement = measurements.find((item) => measurementGuideMatches(item.key, guideKeys ?? [guideKey]));
+          if (measurement) onSelectMeasurementRef.current?.(measurement);
+        };
+        const onPointerDown = (event: PointerEvent) => {
+          if (event.isPrimary && event.button === 0) pointerStart = { x: event.clientX, y: event.clientY };
+        };
+        const onPointerUp = (event: PointerEvent) => {
+          if (!pointerStart || !event.isPrimary) return;
+          const distance = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
+          pointerStart = null;
+          if (distance <= 7) guideAtPointer(event);
+        };
+        const onPointerCancel = () => { pointerStart = null; };
+        canvas.addEventListener("pointerdown", onPointerDown);
+        canvas.addEventListener("pointerup", onPointerUp);
+        canvas.addEventListener("pointercancel", onPointerCancel);
+
         const resize = () => {
           if (!renderer || !scene) return;
           const width = Math.max(1, host.clientWidth);
           const height = Math.max(300, host.clientHeight);
           camera.aspect = width / height;
           camera.updateProjectionMatrix();
-          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 1.5));
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, lowPowerMode ? 1.15 : 1.5));
           renderer.setSize(width, height, false);
           if (!hasUserInteractedRef.current) fitCameraToModel();
         };
@@ -2071,11 +2443,16 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
           window.removeEventListener("resize", onWindowResize);
           document.removeEventListener("visibilitychange", onVisibilityChange);
           canvas.removeEventListener("webglcontextlost", handleContextLost, false);
+          canvas.removeEventListener("webglcontextrestored", handleContextRestored, false);
           observer?.disconnect();
           controls?.removeEventListener("change", requestRender);
           controls?.removeEventListener("start", onControlsStart);
+          canvas.removeEventListener("pointerdown", onPointerDown);
+          canvas.removeEventListener("pointerup", onPointerUp);
+          canvas.removeEventListener("pointercancel", onPointerCancel);
         };
         canvas.addEventListener("webglcontextlost", handleContextLost, false);
+        canvas.addEventListener("webglcontextrestored", handleContextRestored, false);
         requestRender();
         setViewerState("ready");
       } catch {
@@ -2100,7 +2477,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
       if (scene) disposeThreeScene(scene);
       renderer?.dispose();
     };
-  }, [heightUnit, heightValue, measurementSignature]);
+  }, [guideFractionSignature, guideGeometrySignature, heightUnit, heightValue, measurementSignature, modelUrl]);
 
   useEffect(() => {
     if (controlsRef.current) {
@@ -2169,10 +2546,17 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
   const modelHeightLabel = heightValue === null || heightValue === undefined ? "170 cm reference height" : `${modelHeightCm(heightValue, heightUnit).toFixed(1)} cm tall`;
   const focusedMeasurement = focusedMeasurementKey ? measurements.find((measurement) => measurement.key === focusedMeasurementKey) : undefined;
   const focusedMeasurementLabel = focusedMeasurement ? `${displayMeasurementKey(focusedMeasurement.key)} · ${displayMeasurementValue(focusedMeasurement)}` : "No measurement guide selected";
+  const focusedGuideKey = focusedMeasurementKey ? measurementGuideKey(focusedMeasurementKey) : null;
+  const focusedProviderContour = focusedGuideKey ? guideGeometry[focusedGuideKey] : undefined;
+  const guideQualityMessage = modelUrl && focusedMeasurement
+    ? focusedProviderContour
+      ? `Provider contour guide · ${focusedProviderContour.source}`
+      : "Approximate guide — provider contour data was not returned for this measurement."
+    : null;
 
   return (
     <div className="model-3d-viewer">
-      <div id="model-3d-region" className="model-3d-stage" role="region" tabIndex={-1} aria-label="Interactive 3D model with measurement guides" data-model-version="v5" aria-busy={viewerState === "loading"}>
+      <div id="model-3d-region" className="model-3d-stage" role="region" tabIndex={-1} aria-label="Interactive 3D model with measurement guides" data-model-version="v6" aria-busy={viewerState === "loading"}>
         <canvas ref={canvasRef} tabIndex={viewerState === "fallback" ? -1 : 0} aria-hidden={viewerState === "fallback"} aria-label="Interactive 3D body model. Use arrow keys to turn the model." aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown + - Home" aria-describedby={instructionsId + " " + focusStatusId} onKeyDown={handleCanvasKeyDown} />
         <figure className="model-3d-reference"><img src={referenceImage} alt="Reference body scan illustration" width={540} height={960} loading="lazy" /><figcaption>Reference image</figcaption></figure>
         <div className="model-3d-scale" aria-label="Model size summary"><strong>MEASURED BODY MODEL</strong><span>{modelHeightLabel}</span><small>{measurements.length} measurements used in this model</small></div>
@@ -2180,22 +2564,27 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         {viewerState === "fallback" && <div className="model-3d-fallback" role="status"><img src={referenceImage} alt="Reference visualization for the body measurement result" width={540} height={960} /><span>Interactive 3D is unavailable on this device. Showing the reference image.</span></div>}
         <span className="model-preview-badge"><Icon name="scan" size={13} /> Interactive 3D model</span>
         <p className={cn("model-3d-focus-status", focusedMeasurement && "active")} id={focusStatusId} role="status" aria-live="polite">{focusedMeasurement ? "Guide shown: " + focusedMeasurementLabel : "Select a measurement name or row to show its guide."}</p>
+        {guideQualityMessage && <p className={cn("model-3d-guide-quality", focusedProviderContour ? "exact" : "approximate")} role="status">{guideQualityMessage}</p>}
       </div>
       <div className="model-3d-controls" role="group" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { hasUserInteractedRef.current = true; controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-out" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div>
-      <p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Drag to turn the model. Scroll or pinch to zoom. With keyboard focus, use the arrow keys, +/−, or Home.</p>
+       <p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Click a colored guide or measurement row to highlight it. Drag to turn the model; scroll or pinch to zoom. With keyboard focus, use the arrow keys, +/−, or Home.</p>
       {reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}
     </div>
   );
 }
 
-function ModelViewer({ model, measurements = [], heightValue = null, heightUnit = "cm", focusedMeasurementKey = null }: { model: ScanBundle["bodyModel"]; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin"; focusedMeasurementKey?: string | null }) {
+function ModelViewer({ model, measurements = [], heightValue = null, heightUnit = "cm", focusedMeasurementKey = null, onSelectMeasurement }: { model: ScanBundle["bodyModel"]; measurements?: Measurement[]; heightValue?: number | null; heightUnit?: "cm" | "ftin"; focusedMeasurementKey?: string | null; onSelectMeasurement?: (measurement: Measurement) => void }) {
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [assetError, setAssetError] = useState("");
+  const [viewerState, setViewerState] = useState<"loading" | "ready" | "fallback">("loading");
   const localPreview = localPreviewData(model);
+  const guideFractions = useMemo(() => personalizedGuideFractions(model), [model?.id, model?.preview_data]);
+  const guideGeometry = useMemo(() => personalizedGuideGeometry(model), [model?.id, model?.preview_data]);
   useEffect(() => {
     let active = true;
     setAssetUrl(null);
     setAssetError("");
+    setViewerState("loading");
     if (localPreviewData(model)) return () => { active = false; };
     if (!model || model.status !== "ready" || !model.model_url_or_path) return () => { active = false; };
     const path = model.model_url_or_path;
@@ -2207,12 +2596,17 @@ function ModelViewer({ model, measurements = [], heightValue = null, heightUnit 
     void createSignedStorageUrl("body-models", path).then((url) => { if (active) setAssetUrl(url); }).catch((reason: unknown) => { if (active) setAssetError(readableError(reason)); });
     return () => { active = false; };
   }, [model?.id, model?.status, model?.model_url_or_path]);
+  const handleViewerStateChange = (state: "loading" | "ready" | "fallback") => {
+    setViewerState(state);
+    if (state === "fallback" && assetUrl) setAssetError("The personalized model could not be loaded on this device. Showing the measured preview instead.");
+  };
   if (localPreview) {
     const referenceImage = localPreviewPath(localPreview.reference_image) ?? LOCAL_REFERENCE_IMAGE;
-    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel referenceImage={referenceImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASURED BODY MODEL</p><h3>Interactive model made from your measurements</h3><p>We use your height and measurements to size this visual model. It helps you check the result, but it is not a scan-grade 3D body scan. Ask a dressmaker to verify it before tailoring.</p><Badge tone="warning">Check before tailoring</Badge></div></div></div>;
+    return <div className="model-empty model-empty-preview model-local-preview"><InteractiveBodyModel referenceImage={referenceImage} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} guideFractions={guideFractions} guideGeometry={guideGeometry} onSelectMeasurement={onSelectMeasurement} onViewerStateChange={handleViewerStateChange} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASURED BODY MODEL</p><h3>Interactive model made from your measurements</h3><p>We use your height and measurements to size this visual model. It helps you check the result, but it is not a scan-grade 3D body scan. Ask a dressmaker to verify it before tailoring.</p><Badge tone="warning">Check before tailoring</Badge></div></div></div>;
   }
   const providerReady = model?.status === "ready" && Boolean(model.model_url_or_path);
-  return <div className="model-empty model-empty-preview model-provider-preview"><InteractiveBodyModel referenceImage={LOCAL_REFERENCE_IMAGE} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} /><div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">MEASURED BODY MODEL</p><h3>Interactive 3D body model</h3><p>{providerReady ? "The model stays interactive. Select a measurement to show its guide and compare it with the body. A separate detailed model is available from the secure record." : assetError || "We made this visual model from your returned measurements. A detailed 3D model is not available yet."}</p><Badge tone={providerReady ? "success" : "teal"}>{providerReady ? "Detailed model available" : "Measurements mapped to model"}</Badge>{providerReady && assetUrl && <a className="button button-secondary model-provider-link" href={assetUrl} target="_blank" rel="noreferrer">Open detailed model <Icon name="external" size={15} /></a>}{providerReady && !assetUrl && !assetError && <small className="model-provider-loading">Loading secure model…</small>}</div></div></div>;
+  const personalizedLoaded = providerReady && Boolean(assetUrl) && viewerState === "ready";
+  return <div className="model-empty model-empty-preview model-provider-preview">{providerReady && !assetUrl && !assetError ? <div className="model-no-result model-provider-loading-state" role="status" aria-live="polite"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><h3>Loading your personalized model</h3><p>Your secure model is being prepared. This view will update when it is ready.</p></div> : <InteractiveBodyModel referenceImage={LOCAL_REFERENCE_IMAGE} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} guideFractions={guideFractions} guideGeometry={guideGeometry} modelUrl={assetUrl} onSelectMeasurement={onSelectMeasurement} onViewerStateChange={handleViewerStateChange} />}<div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">{personalizedLoaded ? "PERSONALIZED BODY MODEL" : "MEASURED BODY PREVIEW"}</p><h3>{personalizedLoaded ? "Interactive 3D body model" : "Interactive model made from your measurements"}</h3><p>{personalizedLoaded ? "Your personalized model is loaded. Select a measurement to show its guide and compare it with the body." : assetError || (providerReady ? "The personalized model is unavailable on this device. Showing the measured preview instead." : "We made this visual model from your returned measurements. A personalized 3D model is not available for this scan.")}</p><Badge tone={personalizedLoaded ? "success" : "warning"}>{personalizedLoaded ? "Personalized model loaded" : "Measured preview · verify before tailoring"}</Badge>{personalizedLoaded && assetUrl && <a className="button button-secondary model-provider-link" href={assetUrl} target="_blank" rel="noreferrer">Open detailed model <Icon name="external" size={15} /></a>}</div></div></div>;
 }
 
 function CustomerMeasurements({ profile, onNavigate }: { profile: Profile; onNavigate: (page: string) => void }) {
