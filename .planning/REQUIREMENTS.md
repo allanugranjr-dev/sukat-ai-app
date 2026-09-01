@@ -72,6 +72,26 @@ Deferred until the v1 contract and validation foundation are stable:
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| TRUTH-01 | Phase 1 | Pending |
+| TRUTH-02 | Phase 1 | Pending |
+| TRUTH-03 | Phase 1 | Pending |
+| TRUTH-04 | Phase 3 | Pending |
+| VALID-01 | Phase 1 | Pending |
+| VALID-02 | Phase 1 | Pending |
+| GEOM-01 | Phase 1 | Pending |
+| GEOM-02 | Phase 1 | Pending |
+| GEOM-03 | Phase 2 | Pending |
+| LIFE-01 | Phase 1 | Pending |
+| LIFE-02 | Phase 1 | Pending |
+| LIFE-03 | Phase 1 | Pending |
+| LIFE-04 | Phase 1 | Pending |
+| BACK-01 | Phase 2 | Pending |
+| BACK-02 | Phase 2 | Pending |
+| PRIV-01 | Phase 1 | Pending |
+| PRIV-02 | Phase 1 | Pending |
+| PERF-01 | Phase 3 | Pending |
+| QA-01 | Phase 3 | Pending |
+| QA-02 | Phase 3 | Pending |
 
 ---
 *Requirements defined: 2026-09-02*
