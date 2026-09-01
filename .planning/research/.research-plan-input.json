@@ -1,0 +1,53 @@
+{
+  "ecosystem": "npm+pypi+web",
+  "config": {
+    "exa_search": false,
+    "brave_search": false,
+    "firecrawl": false,
+    "tavily_search": false
+  },
+  "questions": [
+    {
+      "text": "Current official MediaPipe Pose Landmarker Lite Python task/runtime guidance for CPU-first front and side full-body validation, including supported APIs and model distribution.",
+      "kind": "docs",
+      "library": "mediapipe",
+      "version": "1.0.1"
+    },
+    {
+      "text": "Current official OpenCV guidance for CPU image decoding, resizing, thresholding, contours, morphology, and connected components suitable for deterministic silhouette preprocessing.",
+      "kind": "docs",
+      "library": "opencv",
+      "version": "4.x"
+    },
+    {
+      "text": "Current official Three.js and Khronos glTF guidance for GLB loading, named nodes or metadata, line/contour guide rendering, and keeping provider-authored guide geometry aligned with a model.",
+      "kind": "docs",
+      "library": "three",
+      "version": "0.185.1"
+    },
+    {
+      "text": "Current official FastAPI and Uvicorn guidance for CPU-bound work, background tasks, process workers, graceful shutdown, and why durable job state should live outside in-memory request state.",
+      "kind": "docs",
+      "library": "fastapi",
+      "version": "0.115+"
+    },
+    {
+      "text": "Current official Supabase guidance for private Storage signed URLs, Edge Functions limits/background work, database-backed queues or durable job state, and Realtime status updates.",
+      "kind": "docs",
+      "library": "supabase",
+      "version": "current"
+    },
+    {
+      "text": "Primary package or repository documentation for Anny and CLAD-Body CPU body fitting/anthropometric measurement compatibility, supported Python versions, licensing, and whether the existing pins should be retained.",
+      "kind": "web"
+    },
+    {
+      "text": "Current glTF 2.0 specification guidance for extras, extensions, coordinate conventions, and whether measurement guide metadata should be embedded in GLB or persisted as a separate contract.",
+      "kind": "web"
+    },
+    {
+      "text": "Primary guidance on reporting measurement accuracy versus input/process quality and using uncertainty or validation metadata without fabricating accuracy percentages.",
+      "kind": "web"
+    }
+  ]
+}
