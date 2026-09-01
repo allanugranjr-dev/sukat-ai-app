@@ -4947,3 +4947,118 @@ body {
     padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* Keep the existing Three.js viewer predictable on touch-sized screens. */
+@media (max-width: 700px) {
+  .model-3d-viewer,
+  .model-3d-stage,
+  .model-3d-controls,
+  .model-3d-hint {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .model-3d-viewer {
+    overflow: hidden;
+  }
+
+  .model-3d-stage,
+  .model-3d-stage canvas,
+  .model-no-result {
+    height: clamp(360px, min(72svh, 125vw), 500px);
+    min-height: 360px;
+  }
+
+  .model-3d-stage canvas {
+    display: block;
+    max-width: 100%;
+    touch-action: none;
+    width: 100%;
+  }
+
+  .model-3d-scale {
+    bottom: 12px;
+    left: 12px;
+    max-width: calc(100% - 112px);
+    padding: 9px 10px;
+  }
+
+  .model-3d-scale strong,
+  .model-3d-scale span {
+    font-size: 12px;
+  }
+
+  .model-3d-scale small {
+    font-size: 11px;
+    line-height: 1.3;
+  }
+
+  .model-3d-reference {
+    bottom: 12px;
+    right: 12px;
+    width: 78px;
+  }
+
+  .model-3d-reference img {
+    height: 100px;
+    width: 62px;
+  }
+
+  .model-3d-focus-status {
+    bottom: auto;
+    left: 12px;
+    max-width: none;
+    right: 12px;
+    text-align: center;
+    top: 54px;
+    white-space: normal;
+  }
+
+  .model-3d-guide-quality {
+    bottom: 12px;
+    max-width: calc(100% - 132px);
+  }
+
+  .model-3d-controls {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 12px;
+  }
+
+  .model-3d-controls button {
+    align-items: center;
+    justify-content: center;
+    line-height: 1.2;
+    min-height: 48px;
+    min-width: 0;
+    padding: 7px 8px;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .model-3d-hint {
+    align-items: flex-start;
+    font-size: 13px;
+    gap: 7px;
+    line-height: 1.45;
+    padding: 11px 12px 13px;
+  }
+}
+
+@media (max-width: 700px) and (max-height: 520px) {
+  .model-3d-stage,
+  .model-3d-stage canvas,
+  .model-no-result {
+    height: 360px;
+    min-height: 320px;
+  }
+
+  .model-3d-reference {
+    display: none;
+  }
+
+  .model-3d-scale {
+    max-width: calc(100% - 24px);
+  }
+}
