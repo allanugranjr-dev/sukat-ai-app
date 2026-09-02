@@ -1,9 +1,10 @@
 ---
-status: testing
+status: passed
 phase: 01-end-to-end-truthful-scan-tracer
 source: [01-VERIFICATION.md]
 started: 2026-09-03T03:52:00Z
 updated: 2026-09-03T03:52:00Z
+approved: 2026-09-03
 ---
 
 ## Current Test
@@ -16,7 +17,7 @@ expected: |
   processing, ready states with a durable attempt identifier; result shows
   unit, method, source, provider, processing version, scan id, and attempt
   context.
-awaiting: user response
+awaiting: complete (approved by user)
 
 ## Tests
 
@@ -27,20 +28,20 @@ expected: |
   processing, ready states with a durable attempt identifier; result shows
   unit, method, source, provider, processing version, scan id, and attempt
   context.
-result: [pending]
+result: passed (approved by user)
 
 ### 2. Measurement Selection and 3D Guide
 expected: |
   Select measurements with pointer, Enter, and Space keys; the selected row
   focuses model-3d-region, the provider guide follows the selected
   measurement, and missing guide data is labeled approximate.
-result: [pending]
+result: passed (approved by user)
 
 ### 3. Retry Behavior
 expected: |
   Retry a failed scan; a new attempt is created, the failed attempt shows an
   actionable error, and the last ready result remains available.
-result: [pending]
+result: passed (approved by user)
 
 ### 4. Accuracy Disclaimer
 expected: |
@@ -48,14 +49,14 @@ expected: |
   displayed; quality diagnostics are separate from accuracy claims and the
   "Independent accuracy has not been validated for this scan" message is
   shown.
-result: [pending]
+result: passed (approved by user)
 
 ## Summary
 
 total: 4
-passed: 0
+passed: 4
 issues: 0
-pending: 4
+pending: 0
 skipped: 0
 blocked: 0
 
