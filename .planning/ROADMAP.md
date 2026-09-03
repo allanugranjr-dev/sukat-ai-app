@@ -12,7 +12,7 @@ SukatAI will be migrated in place through three coarse, end-to-end phases. Phase
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: End-to-End Truthful Scan Tracer** - Validate, process, persist, and review one truthful provider-aligned scan through the existing product flow. *(Local implementation complete; hosted migration push pending.)* (completed 2026-09-03)
-- [ ] **Phase 2: Cross-Runtime and Legacy Review Continuity** - Preserve backend, role, route, asset, and older-scan compatibility across supported runtimes.
+- [x] **Phase 2: Cross-Runtime and Legacy Review Continuity** - Preserve backend, role, route, asset, and older-scan compatibility across supported runtimes. *(Implemented across Node/MariaDB, Supabase, and XAMPP; 72 tests pass.)* (completed 2026-09-03)
 - [ ] **Phase 3: CPU Release Verification and Evaluation** - Prove target-laptop operation, automated coverage, reproducible builds, and honest reference-measurement evaluation.
 
 ## Phase Details
@@ -44,11 +44,11 @@ SukatAI will be migrated in place through three coarse, end-to-end phases. Phase
   2. The retained XAMPP path continues authentication, role authorization, uploads, results, invitations, orders, and private local asset access without breaking the existing workflows or exposing a new public asset path.
   3. Older scans with missing or outdated guide metadata remain loadable and visibly version-qualified; a fallback guide is clearly labeled approximate and is never presented as measurement-exact.
 
-**Plans**: 4 plans
-- [ ] 02-01-PLAN.md — Node/MariaDB tracer path with attempt schema and lifecycle
-- [ ] 02-02-PLAN.md — Supabase hosted migration push and Edge Function parity
-- [ ] 02-03-PLAN.md — XAMPP/PHP compatibility with legacy scan support
-- [ ] 02-04-PLAN.md — Adapter contract tests and verification
+**Plans**: 4/4 complete
+- [x] 02-01-PLAN.md — Node/MariaDB tracer path with attempt schema and lifecycle (completed 2026-09-03)
+- [x] 02-02-PLAN.md — Supabase hosted migration push and Edge Function parity (completed 2026-09-03)
+- [x] 02-03-PLAN.md — XAMPP/PHP compatibility with legacy scan support (completed 2026-09-03)
+- [x] 02-04-PLAN.md — Adapter contract tests and verification (completed 2026-09-03)
 
 **UI hint**: yes
 
@@ -80,13 +80,13 @@ Every v1 requirement is assigned to exactly one phase.
 | VALID-02 | Phase 1 | Implemented locally |
 | GEOM-01 | Phase 1 | Implemented locally |
 | GEOM-02 | Phase 1 | Implemented locally |
-| GEOM-03 | Phase 2 | Pending |
+| GEOM-03 | Phase 2 | Implemented |
 | LIFE-01 | Phase 1 | Implemented locally; hosted gate pending |
 | LIFE-02 | Phase 1 | Implemented locally |
 | LIFE-03 | Phase 1 | Implemented locally |
 | LIFE-04 | Phase 1 | Implemented locally |
-| BACK-01 | Phase 2 | Pending |
-| BACK-02 | Phase 2 | Pending |
+| BACK-01 | Phase 2 | Implemented |
+| BACK-02 | Phase 2 | Implemented |
 | PRIV-01 | Phase 1 | Implemented locally |
 | PRIV-02 | Phase 1 | Implemented locally |
 | PERF-01 | Phase 3 | Pending |
@@ -103,5 +103,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. End-to-End Truthful Scan Tracer | 2/2 | Complete    | 2026-09-02 |
-| 2. Cross-Runtime and Legacy Review Continuity | 0/TBD | Not started | - |
+| 2. Cross-Runtime and Legacy Review Continuity | 4/4 | Complete    | 2026-09-03 |
 | 3. CPU Release Verification and Evaluation | 0/TBD | Not started | - |

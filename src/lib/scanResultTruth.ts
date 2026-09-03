@@ -68,8 +68,39 @@ export function measurementProvenance(measurement: Measurement): string {
   return [method, source].filter((value): value is string => value !== null).join(" · ") || "Provider details not reported";
 }
 
-export function qualityIssueText(issue: Record<string, unknown>): string {
-  const message = optionalText(issue.message, 300) ?? optionalText(issue.error, 300) ?? "Provider quality issue reported";
-  const view = optionalText(issue.view, 30);
+const INTERNAL_ERROR_MARKERS = [
+  /sqlstate/i,
+  /constraint/i,
+  /insert\s+into/i,
+  /update\s+.+\s+set/i,
+  /select\s+.+\s+from/i,
+  /parameters?:/i,
+  /node_modules/i,
+  /(?:[A-Za-z]:\\|\\\\)[^\s]+/i,
+  /https?:\/\//i,
+  /bearer\s+/i,
+  /(?:api[_-]?key|secret|password|token)\s*[:=]/i,
+];
+
+const DEFAULT_QUALITY_MESSAGE = "Provider quality issue reported";
+
+function redactErrorMessage(message: string): string {
+  if (INTERNAL_ERROR_MARKERS.some((marker) => marker.test(message))) {
+    return DEFAULT_QUALITY_MESSAGE;
+  }
+  return message;
+}
+
+export function qualityIssueText(issue: unknown): string {
+  if (!issue || typeof issue !== "object") {
+    if (typeof issue === "string" && issue.trim()) {
+      return redactErrorMessage(issue.trim().slice(0, 300));
+    }
+    return DEFAULT_QUALITY_MESSAGE;
+  }
+  const record = issue as Record<string, unknown>;
+  const rawMessage = optionalText(record.message, 300) ?? optionalText(record.error, 300) ?? DEFAULT_QUALITY_MESSAGE;
+  const message = redactErrorMessage(rawMessage);
+  const view = optionalText(record.view, 30);
   return view ? `${view}: ${message}` : message;
 }
