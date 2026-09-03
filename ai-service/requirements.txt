@@ -1,0 +1,15 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.20,<1
+numpy>=2.2,<3
+Pillow>=11,<12
+pydantic>=2.10,<3
+trimesh>=4.6,<5
+opencv-python-headless>=4.10,<5
+# CPU-only fitted-body scanner.  CLAD-Body 0.6.x currently requires Python
+# 3.12+, and is pinned to Anny 0.3.1 because later Anny releases removed the
+# pose parameterisation used by this CLAD release.
+mediapipe==1.0.1
+scipy>=1.15,<2
+clad-body==0.6.1
+anny==0.3.1

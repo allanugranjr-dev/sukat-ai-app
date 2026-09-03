@@ -13,7 +13,7 @@ SukatAI will be migrated in place through three coarse, end-to-end phases. Phase
 
 - [x] **Phase 1: End-to-End Truthful Scan Tracer** - Validate, process, persist, and review one truthful provider-aligned scan through the existing product flow. *(Local implementation complete; hosted migration push pending.)* (completed 2026-09-03)
 - [x] **Phase 2: Cross-Runtime and Legacy Review Continuity** - Preserve backend, role, route, asset, and older-scan compatibility across supported runtimes. *(Implemented across Node/MariaDB, Supabase, and XAMPP; 72 tests pass.)* (completed 2026-09-03)
-- [ ] **Phase 3: CPU Release Verification and Evaluation** - Prove target-laptop operation, automated coverage, reproducible builds, and honest reference-measurement evaluation.
+- [x] **Phase 3: CPU Release Verification and Evaluation** - Prove target-laptop operation, automated coverage, reproducible builds, and honest reference-measurement evaluation. *(Completed; 62+ pytest tests, CPU contract documented, evaluation path implemented, reproducible startup documented.)* (completed 2026-09-03)
 
 ## Phase Details
 
