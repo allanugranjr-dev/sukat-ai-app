@@ -44,7 +44,12 @@ SukatAI will be migrated in place through three coarse, end-to-end phases. Phase
   2. The retained XAMPP path continues authentication, role authorization, uploads, results, invitations, orders, and private local asset access without breaking the existing workflows or exposing a new public asset path.
   3. Older scans with missing or outdated guide metadata remain loadable and visibly version-qualified; a fallback guide is clearly labeled approximate and is never presented as measurement-exact.
 
-**Plans**: TBD
+**Plans**: 4 plans
+- [ ] 02-01-PLAN.md — Node/MariaDB tracer path with attempt schema and lifecycle
+- [ ] 02-02-PLAN.md — Supabase hosted migration push and Edge Function parity
+- [ ] 02-03-PLAN.md — XAMPP/PHP compatibility with legacy scan support
+- [ ] 02-04-PLAN.md — Adapter contract tests and verification
+
 **UI hint**: yes
 
 ### Phase 3: CPU Release Verification and Evaluation

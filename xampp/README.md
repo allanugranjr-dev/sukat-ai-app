@@ -48,4 +48,6 @@ npm run dev:xampp
 
 For the normal XAMPP deployment, no extra environment file is needed because the API URL is resolved relative to the installed app directory.
 
-The XAMPP `process_scan` action uses the same deterministic local demo result and the `public/media/3d-body-scan-reference-v3.png` reference visual as local Supabase development. It does not call an external Imagen or reconstruction provider, and the procedural result is not a personalized scan.
+XAMPP remains a database/Apache compatibility runtime. Its historical `process_scan` reference-result path is not the active personalized scanner and must not be used for tailoring decisions. Use the Node runtime plus the CPU-only `ai-service` provider for real front/side processing; it keeps one scanner implementation and persists lifecycle state in MariaDB.
+
+For UI-only demonstrations, set the Apache environment variable `SUKATAI_ALLOW_DEMO=true`. Demo output is explicitly labeled and must never be used for tailoring. Leave it unset for normal use so XAMPP fails clearly instead of publishing sample measurements.

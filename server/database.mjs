@@ -58,6 +58,46 @@ export async function initializeDatabase({ applySchema = true } = {}) {
   await ensureColumn("users", "email_notifications", "TINYINT(1) NOT NULL DEFAULT 1 AFTER phone");
   await ensureColumn("users", "sms_notifications", "TINYINT(1) NOT NULL DEFAULT 0 AFTER email_notifications");
   await ensureColumn("notifications", "event_key", "VARCHAR(180) NULL AFTER metadata");
+  await ensureColumn("scans", "processing_attempts", "INT NOT NULL DEFAULT 0 AFTER processing_version");
+  await ensureColumn("scans", "processing_attempt_id", "CHAR(36) NULL AFTER processing_attempts");
+  await ensureColumn("scans", "processing_started_at", "DATETIME NULL AFTER processing_attempts");
+  await ensureColumn("scans", "processing_completed_at", "DATETIME NULL AFTER processing_started_at");
+  await ensureColumn("scans", "processing_error_code", "VARCHAR(80) NULL AFTER processing_completed_at");
+  await ensureColumn("scans", "processing_status", "VARCHAR(16) NOT NULL DEFAULT 'queued' AFTER processing_error_code");
+  await ensureColumn("scans", "processing_progress", "TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER processing_status");
+  await ensureColumn("scans", "processing_progress_reported", "TINYINT(1) NOT NULL DEFAULT 0 AFTER processing_progress");
+  await ensureColumn("scans", "processing_error", "VARCHAR(1000) NULL AFTER processing_progress");
+  await ensureColumn("measurements", "measurement_method", "VARCHAR(40) NULL AFTER confidence");
+  await ensureColumn("measurements", "measurement_source", "VARCHAR(120) NULL AFTER measurement_method");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scan_processing_attempts (
+      id CHAR(36) NOT NULL,
+      scan_id CHAR(36) NOT NULL,
+      attempt_number INT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'queued',
+      provider VARCHAR(120) NULL,
+      processing_version VARCHAR(120) NULL,
+      idempotency_key VARCHAR(180) NOT NULL,
+      claim_token VARCHAR(80) NULL,
+      quality VARCHAR(20) NULL,
+      quality_issues JSON NOT NULL,
+      reconstruction JSON NOT NULL,
+      staged_measurements JSON NOT NULL,
+      staged_model_path VARCHAR(500) NULL,
+      error_code VARCHAR(80) NULL,
+      error_message VARCHAR(1000) NULL,
+      is_promoted TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME NULL,
+      completed_at DATETIME NULL,
+      promoted_at DATETIME NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY scan_attempt_number_unique (scan_id, attempt_number),
+      UNIQUE KEY scan_attempt_idempotency_unique (scan_id, idempotency_key),
+      KEY scan_attempts_scan_idx (scan_id, created_at)
+    ) ENGINE=InnoDB
+  `);
   await ensureIndex("notifications", "notifications_event_key_unique", "UNIQUE KEY `notifications_event_key_unique` (`event_key`)");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notification_deliveries (

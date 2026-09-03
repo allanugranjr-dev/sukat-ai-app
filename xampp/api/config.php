@@ -9,6 +9,9 @@ function sukatEnvironment(string $name, string $fallback): string
 
 return [
     'public_app_url' => rtrim(sukatEnvironment('SUKATAI_PUBLIC_APP_URL', 'https://sukat-ai-app.vercel.app'), '/'),
+    // The reference-result path is retained only for UI demos. Real scans
+    // must use the Node gateway and the CPU Anny + CLAD provider.
+    'allow_demo' => in_array(strtolower(sukatEnvironment('SUKATAI_ALLOW_DEMO', 'false')), ['1', 'true', 'yes', 'on'], true),
     'db_host' => sukatEnvironment('SUKATAI_DB_HOST', '127.0.0.1'),
     'db_port' => sukatEnvironment('SUKATAI_DB_PORT', '3306'),
     'db_name' => sukatEnvironment('SUKATAI_DB_NAME', 'sukatai'),

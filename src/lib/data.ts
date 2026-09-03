@@ -16,6 +16,18 @@ function throwIfError(error: unknown): void {
   if (error) throw new Error(readableError(error));
 }
 
+function measurementResponse(value: unknown): Measurement {
+  const row = value as Measurement & {
+    measurement_method?: string | null;
+    measurement_source?: string | null;
+  };
+  return {
+    ...row,
+    method: row.method ?? row.measurement_method ?? null,
+    source: row.source ?? row.measurement_source ?? null,
+  };
+}
+
 export async function createScan(input: {
   customerId: string;
   organizationId: string | null;
@@ -89,7 +101,7 @@ export async function getScanBundle(scanId: string, includeSignedUrls = false): 
   return {
     scan: scanResult.data as Scan,
     assets,
-    measurements: (measurementsResult.data ?? []) as Measurement[],
+    measurements: (measurementsResult.data ?? []).map(measurementResponse),
     bodyModel: (modelResult.data as BodyModel | null) ?? null,
   };
 }

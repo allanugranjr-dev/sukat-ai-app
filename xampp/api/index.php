@@ -260,6 +260,23 @@ function ensureActiveOrganizationMarker(): ?string
     return (string) $first['id'];
 }
 
+function safeProcessingErrorMessage($value): ?string
+{
+    $message = trim((string) ($value ?? ''));
+    if ($message === '') return null;
+
+    $lower = strtolower($message);
+    foreach (['sqlstate', 'constraint', 'insert into', 'parameters:', 'node_modules', 'body-models/', 'scan-captures/', 'bearer ', 'http://', 'https://'] as $marker) {
+        if (str_contains($lower, $marker)) {
+            return 'The processing service could not complete this scan. Your uploaded views are safe; please try again.';
+        }
+    }
+    if (preg_match('/(?:api[_-]?key|secret|password|token)\s*[:=]/i', $message) || strlen($message) > 420) {
+        return 'The processing service could not complete this scan. Your uploaded views are safe; please try again.';
+    }
+    return $message;
+}
+
 function scanResponse(array $row): array
 {
     return [
@@ -273,9 +290,40 @@ function scanResponse(array $row): array
         'capture_source' => $row['capture_source'],
         'processing_provider' => $row['processing_provider'],
         'processing_version' => $row['processing_version'],
-        'failure_reason' => $row['failure_reason'],
+        'processing_attempts' => isset($row['processing_attempts']) ? (int) $row['processing_attempts'] : 0,
+        'processing_attempt_id' => $row['processing_attempt_id'] ?? null,
+        'processing_started_at' => $row['processing_started_at'] ?? null,
+        'processing_completed_at' => $row['processing_completed_at'] ?? null,
+        'processing_error_code' => $row['processing_error_code'] ?? null,
+        'processing_status' => $row['processing_status'] ?? ($row['status'] === 'failed' ? 'failed' : (in_array($row['status'], ['ready_to_share', 'ready_for_review', 'verified'], true) ? 'completed' : ($row['status'] === 'processing' ? 'processing' : 'queued'))),
+        'processing_progress' => isset($row['processing_progress']) ? (int) $row['processing_progress'] : (in_array($row['status'], ['ready_to_share', 'ready_for_review', 'verified'], true) ? 100 : 0),
+        'processing_progress_reported' => isset($row['processing_progress_reported']) ? booleanInput($row['processing_progress_reported']) : false,
+        'processing_error' => safeProcessingErrorMessage($row['processing_error'] ?? ($row['failure_reason'] ?? null)),
+        'failure_reason' => safeProcessingErrorMessage($row['failure_reason'] ?? null),
         'created_at' => $row['created_at'],
         'updated_at' => $row['updated_at'],
+    ];
+}
+
+function processingAttemptResponse(?array $row): ?array
+{
+    if (!$row) return null;
+    $issues = jsonValue($row['quality_issues'] ?? null);
+    return [
+        'id' => $row['id'],
+        'scan_id' => $row['scan_id'],
+        'attempt_number' => (int) $row['attempt_number'],
+        'status' => $row['status'],
+        'provider' => $row['provider'] ?? null,
+        'processing_version' => $row['processing_version'] ?? null,
+        'quality' => $row['quality'] ?? null,
+        'quality_issues' => array_values($issues),
+        'error_code' => $row['error_code'] ?? null,
+        'error_message' => safeProcessingErrorMessage($row['error_message'] ?? null),
+        'started_at' => $row['started_at'] ?? null,
+        'completed_at' => $row['completed_at'] ?? null,
+        'promoted_at' => $row['promoted_at'] ?? null,
+        'is_promoted' => booleanInput($row['is_promoted'] ?? false),
     ];
 }
 
@@ -316,6 +364,8 @@ function measurementResponse(array $row): array
         'value' => (float) $row['value'],
         'unit' => $row['unit'],
         'confidence' => $row['confidence'] === null ? null : (float) $row['confidence'],
+        'method' => $row['measurement_method'] ?? null,
+        'source' => $row['measurement_source'] ?? null,
         'ai_value' => $row['ai_value'] === null ? null : (float) $row['ai_value'],
         'adjusted_value' => $row['adjusted_value'] === null ? null : (float) $row['adjusted_value'],
         'adjusted_by' => $row['adjusted_by'],
@@ -440,9 +490,10 @@ function requireScan(string $scanId, array $user): array
     $scan = findScan($scanId);
     if (!$scan) throw new SukatApiException('Scan not found.', 404);
     $allowed = $scan['customer_id'] === $user['id'] || isAdmin($user) || (
-        in_array($user['role'], ['dressmaker', 'admin'], true)
+        $user['role'] === 'dressmaker'
         && $scan['organization_id'] !== null
         && $scan['organization_id'] === $user['organization_id']
+        && in_array($scan['status'], ['ready_for_review', 'verified', 'needs_recapture'], true)
     );
     if (!$allowed) throw new SukatApiException('You do not have access to this scan.', 403);
     return $scan;
@@ -504,24 +555,24 @@ function storageDirectory(string $relativePath): string
 function localMeasurementTemplate(): array
 {
     return [
-        ['key' => 'ankle_left_circumference', 'value' => 24.3, 'confidence' => 62],
-        ['key' => 'bicep_right_circumference', 'value' => 33.3, 'confidence' => 67],
-        ['key' => 'calf_left_circumference', 'value' => 36.4, 'confidence' => 64],
-        ['key' => 'chest', 'value' => 100.1, 'confidence' => 72],
-        ['key' => 'forearm_circumference', 'value' => 28.0, 'confidence' => 65],
-        ['key' => 'head_circumference', 'value' => 59.7, 'confidence' => 60],
-        ['key' => 'hip', 'value' => 94.8, 'confidence' => 72],
-        ['key' => 'neck', 'value' => 37.6, 'confidence' => 66],
-        ['key' => 'thigh_left_circumference', 'value' => 55.3, 'confidence' => 68],
-        ['key' => 'waist', 'value' => 82.2, 'confidence' => 72],
-        ['key' => 'wrist_right_circumference', 'value' => 17.5, 'confidence' => 61],
-        ['key' => 'arm', 'value' => 57.3, 'confidence' => 67],
-        ['key' => 'back_to_shoulder', 'value' => 21.2, 'confidence' => 63],
-        ['key' => 'inseam', 'value' => 72.4, 'confidence' => 68],
-        ['key' => 'neck_to_pelvis', 'value' => 68.6, 'confidence' => 64],
-        ['key' => 'foot_length', 'value' => 26.2, 'confidence' => 60],
-        ['key' => 'foot_width', 'value' => 9.7, 'confidence' => 58],
-        ['key' => 'shoulder', 'value' => 52.5, 'confidence' => 70],
+        ['key' => 'ankle_left_circumference', 'value' => 24.3],
+        ['key' => 'bicep_right_circumference', 'value' => 33.3],
+        ['key' => 'calf_left_circumference', 'value' => 36.4],
+        ['key' => 'chest', 'value' => 100.1],
+        ['key' => 'forearm_circumference', 'value' => 28.0],
+        ['key' => 'head_circumference', 'value' => 59.7],
+        ['key' => 'hip', 'value' => 94.8],
+        ['key' => 'neck', 'value' => 37.6],
+        ['key' => 'thigh_left_circumference', 'value' => 55.3],
+        ['key' => 'waist', 'value' => 82.2],
+        ['key' => 'wrist_right_circumference', 'value' => 17.5],
+        ['key' => 'arm', 'value' => 57.3],
+        ['key' => 'back_to_shoulder', 'value' => 21.2],
+        ['key' => 'inseam', 'value' => 72.4],
+        ['key' => 'neck_to_pelvis', 'value' => 68.6],
+        ['key' => 'foot_length', 'value' => 26.2],
+        ['key' => 'foot_width', 'value' => 9.7],
+        ['key' => 'shoulder', 'value' => 52.5],
     ];
 }
 
@@ -552,8 +603,15 @@ function failProcessingScan(?string $scanId): void
 {
     if (!$scanId) return;
     try {
-        $statement = database()->prepare("UPDATE scans SET status = 'failed', failure_reason = ?, updated_at = NOW() WHERE id = ? AND status = 'processing'");
-        $statement->execute(['The local processing service could not complete this scan.', $scanId]);
+        $attemptStatement = database()->prepare("UPDATE scan_processing_attempts SET status = 'failed', error_code = 'processing_failed', error_message = ?, completed_at = NOW(), updated_at = NOW() WHERE scan_id = ? AND status IN ('queued', 'validating', 'processing', 'retrying') AND is_promoted = 0");
+        $attemptStatement->execute(['The local processing service could not complete this scan.', $scanId]);
+    } catch (Throwable $error) {
+        error_log('SukatAI could not persist scan attempt failure: ' . $error->getMessage());
+    }
+    try {
+        $statement = database()->prepare("UPDATE scans SET status = 'failed', processing_status = 'failed', processing_progress = LEAST(99, GREATEST(0, COALESCE(processing_progress, 0))), processing_progress_reported = 0, failure_reason = ?, processing_error_code = 'processing_failed', processing_error = ?, updated_at = NOW() WHERE id = ? AND status = 'processing'");
+        $message = 'The local processing service could not complete this scan.';
+        $statement->execute([$message, $message, $scanId]);
     } catch (Throwable $error) {
         error_log('SukatAI could not persist scan processing failure: ' . $error->getMessage());
     }
@@ -840,7 +898,8 @@ try {
             foreach (['height_unit', 'status', 'capture_source', 'failure_reason'] as $field) {
                 if (array_key_exists($field, $data)) {
                     $value = stringInput($data, $field);
-                    if ($field === 'status' && !in_array($value, ['draft', 'uploaded', 'processing_queued', 'processing', 'ready_for_review', 'verified', 'needs_recapture', 'failed'], true)) throw new SukatApiException('The scan status is invalid.', 400);
+                    if ($field === 'status' && !in_array($value, ['draft', 'uploaded', 'processing_queued', 'processing', 'ready_to_share', 'ready_for_review', 'verified', 'needs_recapture', 'failed'], true)) throw new SukatApiException('The scan status is invalid.', 400);
+                    if ($field === 'status' && $isCustomer && $value === 'ready_for_review' && $value !== $scan['status'] && $scan['status'] !== 'ready_to_share') throw new SukatApiException('This result can only be shared after processing is complete.', 403);
                     if ($field === 'status' && $value !== $scan['status']) {
                         $allowedStatuses = $isCustomer ? ['draft', 'uploaded', 'processing_queued', 'ready_for_review', 'needs_recapture'] : ['verified', 'needs_recapture'];
                         if (!in_array($value, $allowedStatuses, true)) throw new SukatApiException($isCustomer ? 'Customers cannot set a staff or provider status.' : 'Dressmakers can only verify or request recapture for a scan.', 403);
@@ -872,7 +931,19 @@ try {
             $statement = database()->prepare('SELECT * FROM body_models WHERE scan_id = ? LIMIT 1');
             $statement->execute([$scan['id']]);
             $model = $statement->fetch();
-            jsonResponse(['scan' => scanResponse($scan), 'assets' => $assets, 'measurements' => $measurements, 'bodyModel' => $model ? bodyModelResponse($model) : null]);
+            $attempt = null;
+            if (!empty($scan['processing_attempt_id'])) {
+                $statement = database()->prepare('SELECT * FROM scan_processing_attempts WHERE id = ? LIMIT 1');
+                $statement->execute([$scan['processing_attempt_id']]);
+                $attempt = $statement->fetch() ?: null;
+            }
+            jsonResponse([
+                'scan' => scanResponse($scan),
+                'assets' => $assets,
+                'measurements' => $measurements,
+                'bodyModel' => $model ? bodyModelResponse($model) : null,
+                'processingAttempt' => processingAttemptResponse($attempt),
+            ]);
         }
 
         case 'customer_scans': {
@@ -921,7 +992,10 @@ try {
                 jsonResponse(array_map('profileResponse', $statement->fetchAll()));
             }
             if ($action === 'org_scans') {
-                $statement = database()->prepare('SELECT * FROM scans WHERE organization_id = ? ORDER BY updated_at DESC');
+                $query = $user['role'] === 'admin'
+                    ? 'SELECT * FROM scans WHERE organization_id = ? ORDER BY updated_at DESC'
+                    : "SELECT * FROM scans WHERE organization_id = ? AND status IN ('ready_for_review', 'verified', 'needs_recapture') ORDER BY updated_at DESC";
+                $statement = database()->prepare($query);
                 $statement->execute([$organizationId]);
                 jsonResponse(array_map('scanResponse', $statement->fetchAll()));
             }
@@ -1196,18 +1270,24 @@ try {
             $statement->execute([$scan['id']]);
             $assets = $statement->fetchAll();
             $types = array_column($assets, 'asset_type');
-            foreach (['front', 'side', 'back'] as $required) {
+            foreach (['front', 'side'] as $required) {
                 if (!in_array($required, $types, true)) {
-                    $statement = database()->prepare("UPDATE scans SET status = ?, failure_reason = ?, updated_at = NOW() WHERE id = ? AND status NOT IN ('ready_for_review', 'verified')");
-                    $statement->execute(['failed', 'Front, side, and back views are required.', $scan['id']]);
+                    $statement = database()->prepare("UPDATE scans SET status = ?, processing_status = 'failed', processing_progress = 10, failure_reason = ?, processing_error_code = 'missing_assets', processing_error = ?, updated_at = NOW() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')");
+                    $statement->execute(['failed', 'Front and side views are required.', 'Front and side views are required.', $scan['id']]);
                     $current = $statement->rowCount() === 0 ? findScan($scan['id']) : null;
-                    if ($current && in_array($current['status'], ['ready_for_review', 'verified'], true)) {
-                        jsonResponse(['status' => 'ready_for_review', 'message' => 'Your scan result is already ready for review.']);
+                    if ($current && in_array($current['status'], ['ready_to_share', 'ready_for_review', 'verified'], true)) {
+                        jsonResponse(['status' => $current['status'], 'message' => $current['status'] === 'ready_to_share' ? 'Your scan result is ready to review and share.' : 'Your scan result is already ready for review.']);
                     }
-                    jsonResponse(['status' => 'failed', 'message' => 'Front, side, and back views are required.']);
+                    jsonResponse(['status' => 'failed', 'message' => 'Front and side views are required.']);
                 }
             }
-            $statement = database()->prepare("UPDATE scans SET status = ?, processing_provider = ?, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND (status IN ('uploaded', 'processing_queued', 'failed', 'draft') OR (status = 'processing' AND updated_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)))");
+            if (!$config['allow_demo']) {
+                $message = 'The XAMPP compatibility runtime does not run the personalized scanner. Start the Node gateway with the CPU Anny + CLAD provider.';
+                $statement = database()->prepare("UPDATE scans SET status = ?, processing_status = 'failed', processing_progress = 10, processing_provider = NULL, processing_error_code = 'provider_not_configured', processing_error = ?, failure_reason = ?, updated_at = NOW() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')");
+                $statement->execute(['failed', $message, $message, $scan['id']]);
+                jsonResponse(['status' => 'failed', 'message' => $message], 503);
+            }
+            $statement = database()->prepare("UPDATE scans SET status = ?, processing_status = 'processing', processing_progress = 25, processing_provider = ?, processing_attempts = COALESCE(processing_attempts, 0) + 1, processing_started_at = NOW(), processing_completed_at = NULL, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND (status IN ('uploaded', 'processing_queued', 'failed', 'draft') OR (status = 'processing' AND updated_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)))");
             $statement->execute(['processing', 'local', $scan['id']]);
             if ($statement->rowCount() === 0) {
                 $current = findScan($scan['id']);
@@ -1215,37 +1295,78 @@ try {
                     jsonResponse(['status' => $current['status'] ?? $scan['status'], 'message' => 'This scan is already being processed or is not ready to process.']);
                 }
             }
+            $attemptNumber = max(1, (int) ($scan['processing_attempts'] ?? 0) + 1);
+            $processingAttemptId = uuid();
+            $processingVersion = 'xampp-local-demo-v1';
+            $attemptStatement = database()->prepare("INSERT INTO scan_processing_attempts (id, scan_id, attempt_number, status, provider, processing_version, idempotency_key, claim_token, quality_issues, reconstruction, staged_measurements, started_at, updated_at) VALUES (?, ?, ?, 'processing', ?, ?, ?, ?, '[]', '{}', '[]', NOW(), NOW())");
+            $attemptStatement->execute([$processingAttemptId, $scan['id'], $attemptNumber, 'local', $processingVersion, $scan['id'] . ':' . $attemptNumber, uuid()]);
+            $linkStatement = database()->prepare('UPDATE scans SET processing_attempt_id = ?, updated_at = NOW() WHERE id = ? AND status = ?');
+            $linkStatement->execute([$processingAttemptId, $scan['id'], 'processing']);
+            if ($linkStatement->rowCount() !== 1) throw new SukatApiException('The scan changed while processing was starting.', 409);
             $height = $scan['height_value'] === null ? 170.0 : (float) $scan['height_value'];
             if ($scan['height_unit'] === 'ftin') $height *= 2.54;
             $scale = min(1.14, max(0.86, $height / 170.0));
-            $hasHeight = $scan['height_value'] !== null && is_numeric($scan['height_value']);
-            $penalty = $hasHeight ? 0 : 10;
+            $localMeasurements = [];
+            foreach (localMeasurementTemplate() as $measurement) {
+                $value = round((float) $measurement['value'] * $scale, 1);
+                $localMeasurements[] = [
+                    'key' => $measurement['key'],
+                    'value' => $value,
+                    'unit' => 'cm',
+                    'confidence' => null,
+                    'method' => 'reference-template',
+                    'source' => 'xampp-local-demo',
+                    'ai_value' => $value,
+                ];
+            }
+            $qualityIssues = [[
+                'code' => 'DEMO_RESULT',
+                'message' => 'This XAMPP compatibility result is a reference template, not a personalized body scan.',
+                'severity' => 'warning',
+            ]];
+            $previewPayload = [
+                'kind' => 'local-reference-3d-body-scan',
+                'reference_image' => '/media/3d-body-scan-reference-v3.png',
+                'source' => 'local reference image; not a personalized scan',
+                'processing_attempt_id' => $processingAttemptId,
+                'processing_version' => $processingVersion,
+                'scan_quality' => 'poor',
+                'quality_issues' => $qualityIssues,
+                'measurement_provenance' => array_map(static fn (array $measurement): array => [
+                    'key' => $measurement['key'],
+                    'method' => $measurement['method'],
+                    'source' => $measurement['source'],
+                ], $localMeasurements),
+            ];
+            $stageStatement = database()->prepare("UPDATE scan_processing_attempts SET processing_version = ?, quality = 'poor', quality_issues = ?, reconstruction = ?, staged_measurements = ?, staged_model_path = ?, updated_at = NOW() WHERE id = ? AND status = 'processing' AND is_promoted = 0");
+            $stageStatement->execute([$processingVersion, json_encode($qualityIssues, JSON_UNESCAPED_SLASHES), '{}', json_encode($localMeasurements, JSON_UNESCAPED_SLASHES), 'local-reference-3d-body-scan', $processingAttemptId]);
+            if ($stageStatement->rowCount() !== 1) throw new SukatApiException('The local processing attempt could not be staged.', 500);
             $db = database();
             $db->beginTransaction();
             try {
-                $statement = $db->prepare('INSERT INTO measurements (id, scan_id, `key`, value, unit, confidence, ai_value) VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), confidence = VALUES(confidence), ai_value = VALUES(ai_value), updated_at = NOW()');
-                foreach (localMeasurementTemplate() as $measurement) {
-                    $value = round((float) $measurement['value'] * $scale, 1);
-                    $confidence = max(45, (float) $measurement['confidence'] - $penalty);
-                    $statement->execute([uuid(), $scan['id'], $measurement['key'], $value, 'cm', $confidence, $value]);
+                $db->prepare('DELETE FROM measurements WHERE scan_id = ?')->execute([$scan['id']]);
+                $statement = $db->prepare('INSERT INTO measurements (id, scan_id, `key`, value, unit, confidence, measurement_method, measurement_source, ai_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), confidence = VALUES(confidence), measurement_method = VALUES(measurement_method), measurement_source = VALUES(measurement_source), ai_value = VALUES(ai_value), updated_at = NOW()');
+                foreach ($localMeasurements as $measurement) {
+                    // XAMPP local values are references, not provider output;
+                    // never persist fabricated confidence percentages.
+                    $statement->execute([uuid(), $scan['id'], $measurement['key'], $measurement['value'], 'cm', null, $measurement['method'], $measurement['source'], $measurement['ai_value']]);
                 }
-                $previewData = json_encode([
-                    'kind' => 'local-reference-3d-body-scan',
-                    'reference_image' => '/media/3d-body-scan-reference-v3.png',
-                    'source' => 'local reference image; not a personalized scan',
-                ], JSON_UNESCAPED_SLASHES);
+                $previewData = json_encode($previewPayload, JSON_UNESCAPED_SLASHES);
                 $statement = $db->prepare('INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)');
                 $statement->execute([uuid(), $scan['id'], 'local', 'local-reference-3d-body-scan', $previewData, 'ready']);
-                $statement = $db->prepare("UPDATE scans SET status = ?, processing_provider = ?, processing_version = ?, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND status = 'processing'");
-                $statement->execute(['ready_for_review', 'local', 'xampp-local-demo-v1', $scan['id']]);
+                $statement = $db->prepare("UPDATE scans SET status = ?, processing_status = 'completed', processing_progress = 100, processing_progress_reported = 1, processing_provider = ?, processing_version = ?, processing_attempt_id = ?, processing_completed_at = NOW(), processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND status = 'processing'");
+                $statement->execute(['ready_to_share', 'local', $processingVersion, $processingAttemptId, $scan['id']]);
                 if ($statement->rowCount() !== 1) throw new SukatApiException('The scan changed while it was being processed.', 409);
+                $statement = $db->prepare("UPDATE scan_processing_attempts SET status = 'promoted', is_promoted = 1, completed_at = NOW(), promoted_at = NOW(), updated_at = NOW() WHERE id = ? AND status = 'processing' AND is_promoted = 0");
+                $statement->execute([$processingAttemptId]);
+                if ($statement->rowCount() !== 1) throw new SukatApiException('The local processing attempt could not be promoted.', 500);
                 $db->commit();
             } catch (Throwable $error) {
                 if ($db->inTransaction()) $db->rollBack();
                 throw $error;
             }
             $processingScanId = null;
-            jsonResponse(['status' => 'ready_for_review', 'message' => 'XAMPP local demo result is ready for tailor review.']);
+            jsonResponse(['status' => 'ready_to_share', 'message' => 'XAMPP demo result is ready. Review it before sharing it with your dressmaker.']);
         }
 
         default:

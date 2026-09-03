@@ -1,13 +1,13 @@
 # SukatAI
 
-SukatAI is a measurement workspace for customers, dressmakers, and administrators. Customers create private scans from front, side, and back photos. The primary local runtime is Node.js + MariaDB + Socket.IO; Supabase remains an optional hosted runtime.
+SukatAI is a measurement workspace for customers, dressmakers, and administrators. Customers create private scans from front and side photos, with an optional back reference. The primary local runtime is Node.js + MariaDB + Socket.IO; Supabase remains an optional hosted runtime.
 
 ## Requirements
 
 - Node.js 20 or newer
 - XAMPP MariaDB, when using the Node.js local runtime
 - A Supabase project and CLI only when using the optional Supabase runtime
-- A reconstruction provider is optional for local development; the local deterministic simulator is used by default
+- The CPU-only `ai-service` provider for local body-scan processing
 
 ## Run the application
 
@@ -98,17 +98,17 @@ Administrators can create organizations, invite dressmakers, and inspect records
 
 Scans move through these persisted states:
 
-`draft` → `uploaded` → `processing_queued` → `processing` → `ready_for_review` → `verified`
+`draft` → `uploaded` → `processing_queued` → `processing` → `ready_to_share` → `ready_for_review` → `verified`
 
 The review workflow can move a result to `needs_recapture`, and provider failures use `failed`. The browser only advances after a database write. It never invents measurement values, confidence, photos, or model assets.
 
 Each upload is validated as JPG, PNG, or WebP and must be under 10 MB. The file is written to the private `scan-captures` bucket, then its path and metadata are recorded in `scan_assets`. Camera frames use the same Storage path as file uploads.
 
-`process-scan` requires all three view types. An explicit `RECONSTRUCTION_PROVIDER=local` setting—or an otherwise unconfigured request—uses a deterministic simulator. It writes clearly labeled demo measurements derived from the height reference and attaches the local reference visual (`public/media/3d-body-scan-reference-v3.png`) for the interactive 3D viewer, then moves the scan to `ready_for_review`. The procedural model and reference image are not a personalized scan or reconstruction; values must be checked by a dressmaker before tailoring.
+`process-scan` requires the front and side view types; the back view remains optional diagnostic context. The Node and Supabase runtimes require an explicitly configured reconstruction provider and fail truthfully when one is missing. The old XAMPP reference-result path is retained only as a compatibility path and is not the active personalized scanner. No sample values are published as a provider result.
 
 The results viewer uses a lightweight Three.js scene rather than a 3D video. Users can drag to rotate the mannequin, scroll or pinch to zoom, reset the camera, pause auto-rotation, and show or hide measurement guides. The local reference image is also shown as the WebGL fallback/reference thumbnail for devices that cannot render the scene.
 
-For production-quality personalized results, configure a real provider. Until then, the hosted function uses the clearly labeled local demo fallback so scans can complete without getting stuck in the queue. When a provider is configured, the function creates short-lived signed URLs for the private views, sends the scan metadata and URLs, validates the response, writes measurements and an optional body-model asset, and sets the scan to `ready_for_review`. Invalid or failed provider responses set `failed` with a reason.
+For production-quality personalized results, configure a real provider. The hosted function marks a scan as failed with an actionable provider-not-configured reason until a provider is configured (or explicit demo mode is enabled for a local/test project), so it does not silently publish sample values. When a provider is configured, the function creates short-lived signed URLs for the private views, sends the scan metadata and URLs, validates the response, writes measurements and an optional body-model asset, and sets the scan to `ready_to_share`. The customer can then review the result and explicitly share it, moving it to `ready_for_review`; invalid or failed provider responses set `failed` with a reason.
 
 ### Provider response contract
 
@@ -127,13 +127,13 @@ The configured endpoint receives JSON like:
 }
 ```
 
-It must return at least one valid measurement:
+It must return a valid measurement set and a readable GLB model:
 
 ```json
 {
   "processing_version": "provider-version",
   "measurements": [
-    { "key": "chest", "value": 92.4, "unit": "cm", "confidence": 91.2 }
+    { "key": "chest", "value": 92.4, "unit": "cm", "method": "mesh", "source": "provider-name", "confidence": null }
   ],
   "body_model": {
     "path": "organization/customer/scan/model.glb",
@@ -142,7 +142,11 @@ It must return at least one valid measurement:
 }
 ```
 
-The body-model path should point to the private `body-models` bucket. Measurement keys, positive values, units, and confidence ranges are validated before persistence.
+The body-model path should point to the private `body-models` bucket. A
+measurement-only response is rejected and cannot become a completed scan.
+Measurement keys, positive values, units, method/source provenance, and
+confidence ranges are validated before persistence. A missing confidence stays
+unreported rather than becoming a zero or accuracy percentage.
 
 ## Node.js + MariaDB + Socket.IO runtime
 
@@ -186,7 +190,7 @@ Create a versioned local backup of the MariaDB database and scan storage with:
 
 Backups are written to backups/ by default. Set SUKATAI_BACKUP_DIR to place them on a separate drive. The backup command uses C:\xampp\mysql\bin\mysqldump.exe on Windows and can be pointed at another dump binary with SUKATAI_DB_DUMP_BIN.
 
-The Node local processor uses the same clearly labeled deterministic demo reconstruction as the other local runtimes. It does not call Imagen or an external reconstruction provider.
+The Node local processor calls the configured CPU-only `ai-service` provider. Set `RECONSTRUCTION_PROVIDER=ai-service`, `RECONSTRUCTION_API_URL=http://127.0.0.1:8000`, and the matching server-only API key before starting Node. If the provider is absent or fails, the scan is marked failed and no sample measurements are saved.
 
 ## XAMPP runtime
 
@@ -236,6 +240,28 @@ npm run build
 ```
 
 The tests cover scan navigation, upload/height guardrails, and measurement-to-model mapping. The production boundary is enforced by Supabase RLS, private Storage policies, and server-side Edge Function secrets. Before a release, run `npm run typecheck`, `npm test`, and the build command for the selected runtime (`npm run build:node`, `npm run build:supabase`, or `npm run build:xampp`).
+
+## Image-based AI measurement service
+
+The isolated `ai-service/` package provides the active FastAPI contract for MediaPipe Lite validation, height calibration, bounded CPU Anny fitting, CLAD-Body measurements, and GLB export. The existing Node gateway connects to it with server-only values in `.env.node.local`:
+
+```dotenv
+RECONSTRUCTION_PROVIDER=ai-service
+RECONSTRUCTION_API_URL=http://127.0.0.1:8000
+RECONSTRUCTION_TIMEOUT_MS=300000
+AI_SERVICE_API_KEY=local-only
+```
+
+Download the small pose asset once, then start it from the repository root in a second terminal:
+
+```powershell
+if (-not (Test-Path ai-service/.venv/Scripts/python.exe)) { python -m venv ai-service/.venv }
+& ai-service/.venv/Scripts/python.exe -m pip install -r ai-service/requirements-dev.txt
+& ai-service/.venv/Scripts/python.exe ai-service/scripts/download_pose_model.py
+& ai-service/.venv/Scripts/python.exe -m uvicorn app.main:app --app-dir ai-service --host 127.0.0.1 --port 8000
+```
+
+Run `& ai-service/.venv/Scripts/python.exe -m pytest ai-service/tests -q` and `& ai-service/.venv/Scripts/python.exe ai-service/scripts/system_check.py` before using it. Licensed PIXIE/SMPL-X model files and a compatible runner are intentionally not bundled; see [ai-service/MODEL_SETUP.md](ai-service/MODEL_SETUP.md) and [ai-service/ARCHITECTURE.md](ai-service/ARCHITECTURE.md).
 
 ## Project layout
 

@@ -1,0 +1,28 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": null,
+  "phases": [
+    {
+      "number": "1",
+      "name": "End-to-End Truthful Scan Tracer",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Cross-Runtime and Legacy Review Continuity",
+      "status": "pending"
+    },
+    {
+      "number": "3",
+      "name": "CPU Release Verification and Evaluation",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step (plan phase 2)",
+    "reason": "Phase 2 of 3 — needs a plan"
+  },
+  "updated_at": "2026-09-02T20:09:37.117Z"
+}

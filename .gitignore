@@ -16,4 +16,10 @@ supabase/.branches/
 .DS_Store
 coverage
 
+ai-service/.venv/
+ai-service/output/
+ai-service/models/*
+!ai-service/models/.gitkeep
+ai-service/vendor/
+
 .vercel

@@ -35,7 +35,15 @@ export const config = {
   storageDirectory: path.resolve(projectRoot, process.env.SUKATAI_STORAGE_DIR ?? "xampp/storage"),
   distDirectory: path.join(projectRoot, "dist-node"),
   publicDirectory: path.join(projectRoot, "public"),
-  processingDelayMs: numberEnv("SUKATAI_PROCESSING_DELAY_MS", 900),
+  reconstruction: {
+    // The only built-in scanner is the CPU-only Anny + CLAD service. An
+    // absent provider must fail clearly rather than select a sample template.
+    provider: (process.env.RECONSTRUCTION_PROVIDER ?? "ai-service").trim().toLowerCase(),
+    apiUrl: (process.env.RECONSTRUCTION_API_URL ?? process.env.AI_SERVICE_URL ?? "").trim().replace(/\/$/, ""),
+    apiKey: (process.env.RECONSTRUCTION_API_KEY ?? process.env.AI_SERVICE_API_KEY ?? "").trim(),
+    timeoutMs: numberEnv("RECONSTRUCTION_TIMEOUT_MS", 120000),
+    maxModelBytes: numberEnv("RECONSTRUCTION_MAX_MODEL_BYTES", 25 * 1024 * 1024),
+  },
   sessionHours: numberEnv("SUKATAI_SESSION_HOURS", 24),
   notifications: {
     emailProvider: (process.env.SUKATAI_EMAIL_PROVIDER ?? (process.env.RESEND_API_KEY ? "resend" : "console")).trim().toLowerCase(),
@@ -48,12 +56,15 @@ export const config = {
     publicAppUrl: (process.env.SUKATAI_PUBLIC_APP_URL ?? canonicalAppUrl).trim().replace(/\/$/, ""),
   },
   allowedOrigins: listEnv("SUKATAI_WEB_ORIGINS", [
+    canonicalAppUrl,
     "http://127.0.0.1:3000",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "http://127.0.0.1:3001",
     "http://localhost:3001",
+    "http://127.0.0.1:3002",
+    "http://localhost:3002",
   ]),
   cookieSecure: process.env.SUKATAI_COOKIE_SECURE === "true",
   cookieSameSite: process.env.SUKATAI_COOKIE_SAMESITE === "None" ? "None" : "Lax",

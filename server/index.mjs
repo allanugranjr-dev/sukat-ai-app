@@ -18,6 +18,8 @@ import {
   rows,
   transaction,
 } from "./database.mjs";
+import { isAiProviderEnabled, processWithAiService } from "./aiService.mjs";
+import { claimScanAttempt, failScanAttempt, promoteScanAttempt, safeProcessingErrorMessage, scanAttemptResponse, stageScanAttempt } from "./scanProcessingAttempt.mjs";
 
 class ApiError extends Error {
   constructor(message, status = 400) {
@@ -32,12 +34,14 @@ app.disable("x-powered-by");
 const httpServer = http.createServer(app);
 let io;
 const processingJobs = new Map();
+let processingQueue = Promise.resolve();
 const sessionCookieName = "sukatai_node";
 const allowedScanStatuses = [
   "draft",
   "uploaded",
   "processing_queued",
   "processing",
+  "ready_to_share",
   "ready_for_review",
   "verified",
   "needs_recapture",
@@ -48,11 +52,19 @@ const allowedFittingStatuses = ["requested", "confirmed", "completed", "reschedu
 const allowedReviewEvents = ["opened", "adjusted", "approved", "recapture_requested", "photo_accessed", "deleted"];
 const customerScanStatuses = ["draft", "uploaded", "processing_queued", "ready_for_review", "needs_recapture"];
 const staffScanStatuses = ["verified", "needs_recapture"];
-const getActions = new Set(["health", "session", "profile", "notifications", "organizations", "invitations", "admin_scans", "admin_orders", "asset"]);
+const getActions = new Set(["health", "session", "profile", "notifications", "organizations", "invitations", "admin_scans", "admin_orders", "asset", "scan_processing_status"]);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
 });
+
+function hasImageSignature(buffer, mimeType) {
+  if (!Buffer.isBuffer(buffer)) return false;
+  if (mimeType === "image/jpeg") return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (mimeType === "image/png") return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mimeType === "image/webp") return buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP";
+  return false;
+}
 
 function sendData(res, data, status = 200) {
   res.status(status).json({ ok: true, data });
@@ -60,13 +72,18 @@ function sendData(res, data, status = 200) {
 
 function sendError(res, error) {
   const status = error instanceof ApiError ? error.status : 500;
-  if (status >= 500) console.error("SukatAI Node API error:", error);
+  if (status >= 500) {
+    const logMessage = error instanceof ApiError ? error.message : safeProcessingErrorMessage(error instanceof Error ? error.message : "");
+    console.error("SukatAI Node API error:", logMessage);
+  }
   if (res.headersSent) return;
+  const defaultMessage = "The Node.js API could not complete the request.";
+  const message = status >= 500
+    ? defaultMessage
+    : error instanceof ApiError && error.message ? error.message : defaultMessage;
   res.status(status).json({
     ok: false,
-    message: error instanceof Error && error.message
-      ? error.message
-      : "The Node.js API could not complete the request.",
+    message,
   });
 }
 
@@ -402,7 +419,18 @@ function scanResponse(scan) {
     capture_source: scan.capture_source,
     processing_provider: scan.processing_provider,
     processing_version: scan.processing_version,
-    failure_reason: scan.failure_reason,
+    processing_attempts: scan.processing_attempts === undefined || scan.processing_attempts === null ? 0 : Number(scan.processing_attempts),
+    processing_attempt_id: scan.processing_attempt_id ?? null,
+    processing_started_at: isoDate(scan.processing_started_at),
+    processing_completed_at: isoDate(scan.processing_completed_at),
+    processing_error_code: scan.processing_error_code ?? null,
+    processing_status: scan.processing_status ?? (scan.status === "failed" ? "failed" : ["ready_to_share", "ready_for_review", "verified"].includes(scan.status) ? "completed" : scan.status === "processing" ? "processing" : "queued"),
+    processing_progress: scan.processing_progress === undefined || scan.processing_progress === null ? 0 : Number(scan.processing_progress),
+    processing_progress_reported: Boolean(scan.processing_progress_reported),
+    processing_error: (scan.processing_error || scan.failure_reason)
+      ? safeProcessingErrorMessage(scan.processing_error ?? scan.failure_reason)
+      : null,
+    failure_reason: scan.failure_reason ? safeProcessingErrorMessage(scan.failure_reason) : null,
     created_at: isoDate(scan.created_at),
     updated_at: isoDate(scan.updated_at),
   };
@@ -442,6 +470,8 @@ function measurementResponse(measurement) {
     value: Number(measurement.value),
     unit: measurement.unit,
     confidence: measurement.confidence === null ? null : Number(measurement.confidence),
+    method: measurement.measurement_method ?? null,
+    source: measurement.measurement_source ?? null,
     ai_value: measurement.ai_value === null ? null : Number(measurement.ai_value),
     adjusted_value: measurement.adjusted_value === null ? null : Number(measurement.adjusted_value),
     adjusted_by: measurement.adjusted_by,
@@ -595,7 +625,7 @@ async function requireScan(scanId, user) {
   if (!scan) throw new ApiError("Scan not found.", 404);
   const allowed = scan.customer_id === user.id
     || user.role === "admin"
-    || (user.role === "dressmaker" && scan.organization_id !== null && scan.organization_id === user.organization_id);
+    || (user.role === "dressmaker" && scan.organization_id !== null && scan.organization_id === user.organization_id && ["ready_for_review", "verified", "needs_recapture"].includes(scan.status));
   if (!allowed) throw new ApiError("You do not have access to this scan.", 403);
   return scan;
 }
@@ -638,8 +668,22 @@ function publicAssetUrl(req, assetPath) {
 
 function normalizedStoragePath(value) {
   const relative = String(value ?? "").replaceAll("\\", "/").replace(/^\/+/, "");
-  if (!relative || relative.split("/").some((part) => part === "..")) throw new ApiError("Invalid storage path.", 400);
+  if (!relative || /[\u0000-\u001f\u007f]/.test(relative) || relative.split("/").some((part) => !part || part === "." || part === "..")) throw new ApiError("Invalid storage path.", 400);
   return relative;
+}
+
+function scanProcessingResponse(scan) {
+  const response = scanResponse(scan);
+  return {
+    scan_id: response.id,
+    status: response.processing_status,
+    progress: response.processing_progress,
+    progress_reported: response.processing_progress_reported,
+    processing_attempt_id: response.processing_attempt_id,
+    error_code: response.processing_error_code,
+    error: response.processing_error,
+    updated_at: response.updated_at,
+  };
 }
 
 async function storageDirectory(relativePath) {
@@ -694,31 +738,10 @@ async function serveAsset(req, res) {
     ".gltf": "model/gltf+json",
   };
   res.setHeader("Content-Type", contentTypes[extension] ?? "application/octet-stream");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'");
   res.setHeader("Content-Disposition", `inline; filename="${path.basename(file).replaceAll('"', "")}"`);
   res.sendFile(file);
-}
-
-function localMeasurementTemplate() {
-  return [
-    ["ankle_left_circumference", 24.3, 62],
-    ["bicep_right_circumference", 33.3, 67],
-    ["calf_left_circumference", 36.4, 64],
-    ["chest", 100.1, 72],
-    ["forearm_circumference", 28.0, 65],
-    ["head_circumference", 59.7, 60],
-    ["hip", 94.8, 72],
-    ["neck", 37.6, 66],
-    ["thigh_left_circumference", 55.3, 68],
-    ["waist", 82.2, 72],
-    ["wrist_right_circumference", 17.5, 61],
-    ["arm", 57.3, 67],
-    ["back_to_shoulder", 21.2, 63],
-    ["inseam", 72.4, 68],
-    ["neck_to_pelvis", 68.6, 64],
-    ["foot_length", 26.2, 60],
-    ["foot_width", 9.7, 58],
-    ["shoulder", 52.5, 70],
-  ];
 }
 
 async function emitScanUpdate(scanId, status, message) {
@@ -733,70 +756,147 @@ async function emitScanUpdate(scanId, status, message) {
 }
 
 async function processScanJob(scanId) {
+  const aiEnabled = isAiProviderEnabled();
+  const processingProvider = aiEnabled ? config.reconstruction.provider : null;
+  let attemptId = null;
   try {
     const scan = await findScan(scanId);
     if (!scan) return;
     const assets = await rows("SELECT * FROM scan_assets WHERE scan_id = ?", [scanId]);
     const types = new Set(assets.map((asset) => asset.asset_type));
-    if (["front", "side", "back"].some((required) => !types.has(required))) {
+    await execute(
+      "UPDATE scans SET processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_error_code = NULL, processing_error = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')",
+      ["validating", 0, 0, scanId],
+    );
+    if (["front", "side"].some((required) => !types.has(required))) {
       const result = await execute(
-        "UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_for_review', 'verified')",
-        ["failed", "Front, side, and back views are required.", scanId],
+        "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, failure_reason = ?, processing_error_code = ?, processing_error = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')",
+        ["failed", "failed", 0, 0, "Front and side views are required.", "missing_assets", "Front and side views are required.", scanId],
       );
-      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", "Front, side, and back views are required.");
+      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", "Front and side views are required.");
       return;
     }
 
+    if (!aiEnabled) throw new ApiError("No reconstruction provider is configured. This scan cannot be completed from reference measurements.", 503);
+
     const claim = await execute(
-      "UPDATE scans SET status = ?, processing_provider = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'processing_queued', 'failed', 'draft', 'processing')",
-      ["processing", "local", scanId],
+      "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_provider = ?, processing_attempts = COALESCE(processing_attempts, 0) + 1, processing_started_at = UTC_TIMESTAMP(), processing_completed_at = NULL, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'processing_queued', 'failed', 'draft', 'processing')",
+      ["processing", "processing", 0, 0, processingProvider, scanId],
     );
     if (claim.affectedRows === 0) {
       const current = await findScan(scanId);
       if (!current || current.status !== "processing") return;
     }
     await emitScanUpdate(scanId, "processing", "Processing has started. Your uploaded views are being checked.");
-    await new Promise((resolve) => setTimeout(resolve, config.processingDelayMs));
-
     const current = await findScan(scanId);
     if (!current || current.status !== "processing") return;
-    const height = current.height_value === null ? 170 : Number(current.height_value) * (current.height_unit === "ftin" ? 2.54 : 1);
-    const scale = Math.min(1.14, Math.max(0.86, height / 170));
-    const penalty = current.height_value === null ? 10 : 0;
-    const previewData = {
-      kind: "local-reference-3d-body-scan",
-      reference_image: "/media/3d-body-scan-reference-v3.png",
-      source: "local reference image; not a personalized scan",
-    };
 
-    await transaction(async (connection) => {
-      for (const [key, templateValue, templateConfidence] of localMeasurementTemplate()) {
-        const value = Math.round(templateValue * scale * 10) / 10;
-        const confidence = Math.max(45, templateConfidence - penalty);
-        await connection.query(
-          "INSERT INTO measurements (id, scan_id, `key`, value, unit, confidence, ai_value) VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), confidence = VALUES(confidence), ai_value = VALUES(ai_value), updated_at = UTC_TIMESTAMP()",
-          [randomUUID(), scanId, key, value, "cm", confidence, value],
-        );
-      }
-      await connection.query(
-        "INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)",
-        [randomUUID(), scanId, "local", "local-reference-3d-body-scan", jsonParameter(previewData), "ready"],
-      );
-      const finalUpdate = await connection.query(
-        "UPDATE scans SET status = ?, processing_provider = ?, processing_version = ?, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
-        ["ready_for_review", "local", "node-mariadb-demo-v1", scanId],
-      );
-      if (finalUpdate.affectedRows === 0) throw new ApiError("The scan changed while it was being processed.", 409);
+    const attempt = await claimScanAttempt({
+      scanId,
+      attemptNumber: Math.max(1, Number(current.processing_attempts ?? 1)),
+      provider: processingProvider,
+      processingVersion: null,
     });
-    await emitScanUpdate(scanId, "ready_for_review", "Your local scan result is ready for tailor review.");
+    attemptId = attempt?.id ?? null;
+
+    if (aiEnabled) {
+      let lastProviderProgress = current.processing_progress_reported ? Number(current.processing_progress ?? 0) : null;
+      let lastProviderProgressReported = Boolean(current.processing_progress_reported);
+      let lastProviderStatus = "processing";
+      let lastProviderMessage = "";
+      const reportProviderProgress = async ({ status, progress, message }) => {
+        const hasProgress = progress !== null && Number.isFinite(progress);
+        const receivedProgress = hasProgress ? Math.min(99, Math.max(0, progress)) : null;
+        const regressed = receivedProgress !== null && lastProviderProgress !== null && receivedProgress < lastProviderProgress;
+        const nextProgress = receivedProgress === null ? lastProviderProgress : Math.max(lastProviderProgress ?? 0, receivedProgress);
+        const nextProgressReported = lastProviderProgressReported || receivedProgress !== null;
+        const nextStatus = regressed ? lastProviderStatus : status;
+        const nextMessage = regressed ? "" : (message ?? "");
+        if (nextProgress === lastProviderProgress && nextProgressReported === lastProviderProgressReported && nextStatus === lastProviderStatus && nextMessage === lastProviderMessage) return;
+        lastProviderProgress = nextProgress;
+        lastProviderProgressReported = nextProgressReported;
+        lastProviderStatus = nextStatus;
+        lastProviderMessage = nextMessage;
+        try {
+          const update = await execute(
+            "UPDATE scans SET processing_status = ?, processing_progress = COALESCE(?, processing_progress), processing_progress_reported = ?, processing_error = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
+            [nextStatus, nextProgress, nextProgressReported ? 1 : 0, scanId],
+          );
+          if (update.affectedRows > 0 && nextMessage) await emitScanUpdate(scanId, nextStatus, nextMessage);
+        } catch (progressError) {
+          // Progress is an observability enhancement; a transient status-write
+          // failure must not turn a valid provider result into a failed scan.
+          console.error(`Could not persist provider progress for ${scanId}:`, progressError);
+        }
+      };
+      const providerResult = await processWithAiService(current, assets, { onProgress: reportProviderProgress, attemptId });
+      if (!providerResult) throw new ApiError("The reconstruction provider is not configured.", 503);
+      await reportProviderProgress({ status: "processing", progress: 98, message: "Saving measurements and the private body model." });
+      const previewData = {
+        kind: "provider-glb",
+        source: "configured reconstruction provider",
+        provider: processingProvider,
+        processing_attempt_id: attemptId,
+        scan_quality: providerResult.quality,
+        quality_issues: providerResult.qualityIssues,
+        reconstruction: providerResult.reconstruction,
+        measurement_provenance: providerResult.measurements.map((measurement) => ({
+          key: measurement.key,
+          method: measurement.method,
+          source: measurement.source,
+        })),
+      };
+      await stageScanAttempt(attemptId, {
+        measurements: providerResult.measurements,
+        modelPath: providerResult.modelPath,
+        quality: providerResult.quality,
+        qualityIssues: providerResult.qualityIssues,
+        reconstruction: providerResult.reconstruction,
+        processingVersion: providerResult.processingVersion,
+      });
+      await transaction(async (connection) => {
+        // Replace the complete promoted set in one transaction. Upserting
+        // alone leaves measurements from an older provider result behind
+        // when the new provider returns a smaller or different key set.
+        await connection.query("DELETE FROM measurements WHERE scan_id = ?", [scanId]);
+        await connection.query("DELETE FROM body_models WHERE scan_id = ?", [scanId]);
+        for (const measurement of providerResult.measurements) {
+          await connection.query(
+            "INSERT INTO measurements (id, scan_id, `key`, value, unit, confidence, measurement_method, measurement_source, ai_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), unit = VALUES(unit), confidence = VALUES(confidence), measurement_method = VALUES(measurement_method), measurement_source = VALUES(measurement_source), ai_value = VALUES(ai_value), updated_at = UTC_TIMESTAMP()",
+            [randomUUID(), scanId, measurement.key, measurement.value, "cm", measurement.confidence, measurement.method?.slice(0, 40) ?? null, measurement.source?.slice(0, 120) ?? null, measurement.ai_value ?? measurement.value],
+          );
+        }
+        await connection.query(
+          "INSERT INTO body_models (id, scan_id, provider, model_url_or_path, preview_data, status) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE provider = VALUES(provider), model_url_or_path = VALUES(model_url_or_path), preview_data = VALUES(preview_data), status = VALUES(status)",
+          [randomUUID(), scanId, processingProvider, providerResult.modelPath, jsonParameter(previewData), "ready"],
+        );
+        const finalUpdate = await connection.query(
+          "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_provider = ?, processing_version = ?, processing_attempt_id = ?, processing_completed_at = UTC_TIMESTAMP(), processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
+          ["ready_to_share", "completed", 100, 1, processingProvider, providerResult.processingVersion, attemptId, scanId],
+        );
+        if (finalUpdate.affectedRows === 0) throw new ApiError("The scan changed while it was being processed.", 409);
+        await promoteScanAttempt(connection, attemptId);
+      });
+      await emitScanUpdate(scanId, "ready_to_share", "Your measurement result is ready. Review it before sharing it with your dressmaker.");
+      return;
+    }
+
   } catch (error) {
-    console.error(`Scan processing failed for ${scanId}:`, error);
+    const failureMessage = safeProcessingErrorMessage(error instanceof Error ? error.message : "The reconstruction provider could not complete this scan.");
+    console.error(`Scan processing failed for ${scanId}:`, failureMessage);
     try {
+      const latest = await findScan(scanId);
+      const failureProgress = Math.min(99, Math.max(0, Number(latest?.processing_progress ?? 0)));
       const result = await execute(
-        "UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
-        ["failed", "The local processing service could not complete this scan.", scanId],
+        "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, failure_reason = ?, processing_error_code = ?, processing_error = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')",
+        ["failed", "failed", failureProgress, failureMessage.slice(0, 1000), aiEnabled ? "provider_failed" : "provider_not_configured", failureMessage.slice(0, 1000), scanId],
       );
-      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", "The local processing service could not complete this scan.");
+      try {
+        await failScanAttempt(attemptId, aiEnabled ? "provider_failed" : "provider_not_configured", failureMessage);
+      } catch (attemptError) {
+        console.error("Could not persist scan attempt failure:", attemptError);
+      }
+      if (result.affectedRows > 0) await emitScanUpdate(scanId, "failed", failureMessage.slice(0, 1000));
     } catch (updateError) {
       console.error("Could not persist scan processing failure:", updateError);
     }
@@ -805,10 +905,24 @@ async function processScanJob(scanId) {
 
 function queueScanProcessing(scanId) {
   if (processingJobs.has(scanId)) return false;
-  const job = processScanJob(scanId).finally(() => processingJobs.delete(scanId));
+  // MariaDB can deadlock when two provider retries delete/replace child rows
+  // in parallel. Serialize the short database commit phase by running scan
+  // jobs through one queue while still keeping the caller asynchronous.
+  const job = processingQueue
+    .then(() => processScanJob(scanId))
+    .finally(() => processingJobs.delete(scanId));
   processingJobs.set(scanId, job);
+  processingQueue = job.catch(() => undefined);
   void job;
   return true;
+}
+
+async function resumePendingScans() {
+  const queued = await rows(
+    "SELECT id FROM scans WHERE status = 'processing_queued' OR (status = 'processing' AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)) ORDER BY updated_at ASC LIMIT 20",
+  );
+  queued.forEach((scan) => queueScanProcessing(scan.id));
+  if (queued.length > 0) console.log(`Resumed ${queued.length} pending scan${queued.length === 1 ? "" : "s"}.`);
 }
 
 function isDuplicateError(error) {
@@ -824,6 +938,12 @@ async function handleAction(req, res) {
     case "health":
       await execute("SELECT 1");
       return sendData(res, { backend: "node", database: "mariadb", realtime: "socket.io" });
+
+    case "scan_processing_status": {
+      const user = await requireUser(req);
+      const scan = await requireScan(stringInput(data, "scan_id", "") ?? "", user);
+      return sendData(res, scanProcessingResponse(scan));
+    }
 
     case "session": {
       const user = await currentUser(req);
@@ -970,11 +1090,11 @@ async function handleAction(req, res) {
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !organizationId) throw new ApiError("Enter a valid email and organization.", 400);
       const organization = await row("SELECT id, name FROM organizations WHERE id = ? LIMIT 1", [organizationId]);
       if (!organization) throw new ApiError("Organization not found.", 404);
+      const redirect = stringInput(data, "redirect_to", "") ?? "";
+      const inviteUrl = invitationRedirectUrl(req, redirect);
       const token = randomBytes(24).toString("hex");
       const invitationId = randomUUID();
       await execute("INSERT INTO dressmaker_invitations (id, organization_id, email, invited_role, token_hash, expires_at, invited_by) VALUES (?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 7 DAY), ?)", [invitationId, organizationId, email, "dressmaker", hashToken(token), user.id]);
-      const redirect = stringInput(data, "redirect_to", "") ?? "";
-      const inviteUrl = invitationRedirectUrl(req, redirect);
       inviteUrl.searchParams.set("invite", token);
       const delivery = await dispatchInvitationEmail({ invitationId, invitedBy: user.id, email, organizationName: organization.name, inviteUrl: inviteUrl.toString() });
       return sendData(res, { invitation_id: invitationId, invite_url: inviteUrl.toString(), email_status: delivery.status, email_provider: delivery.provider, email_error: delivery.error });
@@ -1037,6 +1157,9 @@ async function handleAction(req, res) {
         if (!Object.prototype.hasOwnProperty.call(data, field)) continue;
         const value = stringInput(data, field);
         if (field === "status" && !allowedScanStatuses.includes(value)) throw new ApiError("The scan status is invalid.", 400);
+        if (field === "status" && isCustomer && value === "ready_for_review" && value !== scan.status && scan.status !== "ready_to_share") {
+          throw new ApiError("This result can only be shared after processing is complete.", 403);
+        }
         if (field === "status" && value !== scan.status && !(isCustomer ? customerScanStatuses : staffScanStatuses).includes(value)) {
           throw new ApiError(isCustomer ? "Customers cannot set a staff or provider status." : "Dressmakers can only verify or request recapture for a scan.", 403);
         }
@@ -1060,11 +1183,15 @@ async function handleAction(req, res) {
       const assetResults = assets.map((asset) => assetResponse(asset, includeUrls ? apiUrl(req, "asset", { path: asset.storage_path }) : null));
       const measurements = await rows("SELECT * FROM measurements WHERE scan_id = ? ORDER BY `key`", [scan.id]);
       const model = await row("SELECT * FROM body_models WHERE scan_id = ? LIMIT 1", [scan.id]);
+      const attempt = scan.processing_attempt_id
+        ? await row("SELECT * FROM scan_processing_attempts WHERE id = ? LIMIT 1", [scan.processing_attempt_id])
+        : null;
       return sendData(res, {
         scan: scanResponse(scan),
         assets: assetResults,
         measurements: measurements.map(measurementResponse),
         bodyModel: model ? bodyModelResponse(model) : null,
+        processingAttempt: scanAttemptResponse(attempt),
       });
     }
 
@@ -1096,7 +1223,12 @@ async function handleAction(req, res) {
       requireOrganizationStaff(user, organizationId);
       if (action === "org_customers") return sendData(res, (await rows("SELECT * FROM users WHERE organization_id = ? AND role = 'customer' ORDER BY last_name, first_name", [organizationId])).map(profileResponse));
       if (action === "org_staff") return sendData(res, (await rows("SELECT * FROM users WHERE organization_id = ? AND role IN ('dressmaker', 'admin') ORDER BY last_name, first_name", [organizationId])).map(profileResponse));
-      if (action === "org_scans") return sendData(res, (await rows("SELECT * FROM scans WHERE organization_id = ? ORDER BY updated_at DESC", [organizationId])).map(scanResponse));
+      if (action === "org_scans") {
+        const query = user.role === "admin"
+          ? "SELECT * FROM scans WHERE organization_id = ? ORDER BY updated_at DESC"
+          : "SELECT * FROM scans WHERE organization_id = ? AND status IN ('ready_for_review', 'verified', 'needs_recapture') ORDER BY updated_at DESC";
+        return sendData(res, (await rows(query, [organizationId])).map(scanResponse));
+      }
       return sendData(res, (await rows("SELECT * FROM orders WHERE organization_id = ? ORDER BY created_at DESC", [organizationId])).map(orderResponse));
     }
 
@@ -1212,7 +1344,7 @@ async function handleAction(req, res) {
       if (!req.file) throw new ApiError("The image upload did not complete.", 400);
       const allowedMimeTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
       const extension = allowedMimeTypes[req.file.mimetype];
-      if (!extension) throw new ApiError("Use a JPG, PNG, or WebP image.", 400);
+      if (!extension || !hasImageSignature(req.file.buffer, req.file.mimetype)) throw new ApiError("Use a valid JPG, PNG, or WebP image.", 400);
       const relativeDirectory = `scan-captures/${scan.organization_id ?? "unassigned"}/${scan.customer_id}/${scan.id}`;
       const directory = await storageDirectory(relativeDirectory);
       const relativePath = `${relativeDirectory}/${assetType}-${randomUUID()}.${extension}`;
@@ -1273,18 +1405,26 @@ async function handleAction(req, res) {
       const scan = await requireScan(stringInput(data, "scan_id", "") ?? "", user);
       const assets = await rows("SELECT * FROM scan_assets WHERE scan_id = ?", [scan.id]);
       const types = new Set(assets.map((asset) => asset.asset_type));
-      if (["front", "side", "back"].some((required) => !types.has(required))) {
-        const result = await execute("UPDATE scans SET status = ?, failure_reason = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_for_review', 'verified')", ["failed", "Front, side, and back views are required.", scan.id]);
-        if (result.affectedRows > 0) await emitScanUpdate(scan.id, "failed", "Front, side, and back views are required.");
+      if (["front", "side"].some((required) => !types.has(required))) {
+        const result = await execute("UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, failure_reason = ?, processing_error_code = ?, processing_error = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')", ["failed", "failed", 0, 0, "Front and side views are required.", "missing_assets", "Front and side views are required.", scan.id]);
+        if (result.affectedRows > 0) await emitScanUpdate(scan.id, "failed", "Front and side views are required.");
         if (result.affectedRows === 0) {
           const current = await findScan(scan.id);
-          if (current?.status === "ready_for_review" || current?.status === "verified") return sendData(res, { status: "ready_for_review", message: "Your scan result is already ready for review." });
+          if (["ready_to_share", "ready_for_review", "verified"].includes(current?.status)) return sendData(res, { status: current.status, message: current.status === "ready_to_share" ? "Your scan result is ready to review and share." : "Your scan result is already ready for review." });
         }
-        return sendData(res, { status: "failed", message: "Front, side, and back views are required." });
+        return sendData(res, { status: "failed", message: "Front and side views are required." });
       }
-      if (scan.status === "ready_for_review" || scan.status === "verified") return sendData(res, { status: "ready_for_review", message: "Your scan result is already ready for review." });
+      const heightCm = Number(scan.height_value) * (scan.height_unit === "ftin" ? 2.54 : 1);
+      if (!Number.isFinite(heightCm) || heightCm <= 0) {
+        const message = "A valid height is required before processing a scan.";
+        await execute("UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, failure_reason = ?, processing_error_code = ?, processing_error = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')", ["failed", "failed", 0, 0, message, "invalid_height", message, scan.id]);
+        await emitScanUpdate(scan.id, "failed", message);
+        return sendData(res, { status: "failed", message });
+      }
+      if (["ready_to_share", "ready_for_review", "verified"].includes(scan.status)) return sendData(res, { status: scan.status, message: scan.status === "ready_to_share" ? "Your scan result is ready to review and share." : "Your scan result is already ready for review." });
+      await execute("UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')", ["processing_queued", "queued", 0, 0, scan.id]);
       queueScanProcessing(scan.id);
-      return sendData(res, { status: "processing", message: "Processing has started. Your uploaded views are being checked." }, 202);
+      return sendData(res, { status: "queued", progress: 0, progress_reported: false, message: "Scan processing has been queued." }, 202);
     }
 
     default:
@@ -1387,6 +1527,7 @@ export async function startServer() {
   console.log(`SukatAI Node API listening at http://127.0.0.1:${config.port}`);
   console.log(`MariaDB database: ${config.db.name}@${config.db.host}:${config.db.port}`);
   console.log("Socket.IO live updates are enabled.");
+  await resumePendingScans();
 }
 
 async function stopServer() {

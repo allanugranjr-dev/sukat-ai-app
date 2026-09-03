@@ -19,7 +19,9 @@ export function parseHeightInches(value: string): number | null {
 }
 
 export function isHeightValid(value: string, unit: "cm" | "ftin", unknownHeight: boolean): boolean {
-  if (unknownHeight) return true;
+  // Height is the calibration reference for both the silhouette scale and
+  // the fitted body. Never let an unknown value reach the provider.
+  if (unknownHeight) return false;
   if (unit === "cm") {
     const number = Number(value);
     return Number.isFinite(number) && number >= 120 && number <= 230;
@@ -37,8 +39,8 @@ export function previousScanPosition(step: ScanStep, captureIndex: number): {
   }
   if (step === "capture") return { step: "height", captureIndex: 0 };
   if (step === "height") return { step: "prep", captureIndex: 0 };
-  if (step === "results") return { step: "capture", captureIndex: 2 };
-  if (step === "processing") return { step: "capture", captureIndex: 2 };
+  if (step === "results") return { step: "capture", captureIndex: 0 };
+  if (step === "processing") return { step: "capture", captureIndex: 0 };
   return { step, captureIndex };
 }
 

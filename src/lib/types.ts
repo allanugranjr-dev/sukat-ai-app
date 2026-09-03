@@ -5,10 +5,13 @@ export type ScanStatus =
   | "uploaded"
   | "processing_queued"
   | "processing"
+  | "ready_to_share"
   | "ready_for_review"
   | "verified"
   | "needs_recapture"
   | "failed";
+
+export type ProcessingStage = "queued" | "validating" | "processing" | "completed" | "failed";
 
 export type CaptureSource = "camera" | "upload";
 export type UnitSystem = "cm" | "ftin";
@@ -48,9 +51,35 @@ export interface Scan {
   capture_source: CaptureSource;
   processing_provider: string | null;
   processing_version: string | null;
+  processing_attempts?: number;
+  processing_attempt_id?: string | null;
+  processing_started_at?: string | null;
+  processing_completed_at?: string | null;
+  processing_error_code?: string | null;
+  processing_status?: ProcessingStage | null;
+  processing_progress?: number | null;
+  processing_progress_reported?: boolean;
+  processing_error?: string | null;
   failure_reason: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ScanProcessingAttempt {
+  id: string;
+  scan_id: string;
+  attempt_number: number;
+  status: "queued" | "validating" | "processing" | "retrying" | "failed" | "promoted";
+  provider: string | null;
+  processing_version: string | null;
+  quality: string | null;
+  quality_issues: Array<Record<string, unknown>>;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  promoted_at: string | null;
+  is_promoted: boolean;
 }
 
 export type AssetType = "front" | "side" | "back" | "detail" | "garment_reference";
@@ -83,6 +112,8 @@ export interface Measurement {
   value: number;
   unit: "cm" | "in";
   confidence: number | null;
+  method?: string | null;
+  source?: string | null;
   ai_value: number | null;
   adjusted_value: number | null;
   adjusted_by: string | null;
@@ -97,6 +128,7 @@ export interface ScanBundle {
   assets: ScanAsset[];
   measurements: Measurement[];
   bodyModel: BodyModel | null;
+  processingAttempt?: ScanProcessingAttempt | null;
 }
 
 export interface Order {
@@ -162,6 +194,7 @@ export function scanStatusLabel(status: ScanStatus): string {
     uploaded: "Uploaded",
     processing_queued: "Processing queued",
     processing: "Processing",
+    ready_to_share: "Ready to share",
     ready_for_review: "Ready for tailor review",
     verified: "Verified",
     needs_recapture: "Needs recapture",
@@ -171,7 +204,7 @@ export function scanStatusLabel(status: ScanStatus): string {
 
 export function scanStatusTone(status: ScanStatus): "success" | "warning" | "danger" | "teal" | "neutral" | "blue" {
   if (status === "verified") return "success";
-  if (status === "ready_for_review") return "teal";
+  if (status === "ready_to_share" || status === "ready_for_review") return "teal";
   if (status === "needs_recapture" || status === "processing_queued") return "warning";
   if (status === "failed") return "danger";
   if (status === "processing") return "blue";
