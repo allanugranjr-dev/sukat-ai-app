@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 $config = require __DIR__ . '/config.php';
+require_once __DIR__ . '/mailer.php';
 
 if (session_status() === PHP_SESSION_NONE) {
     session_name('sukatai_xampp');
@@ -129,6 +130,21 @@ function isUuid(string $value): bool
     return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value) === 1;
 }
 
+function isAllowedOrderTransition(string $currentStatus, string $nextStatus): bool
+{
+    if ($currentStatus === $nextStatus) return true;
+    $transitions = [
+        'new' => ['accepted', 'cancelled'],
+        'accepted' => ['in_production', 'cancelled'],
+        'in_production' => ['for_fitting', 'cancelled'],
+        'for_fitting' => ['ready_for_pickup', 'cancelled'],
+        'ready_for_pickup' => ['completed', 'cancelled'],
+        'completed' => [],
+        'cancelled' => [],
+    ];
+    return in_array($nextStatus, $transitions[$currentStatus] ?? [], true);
+}
+
 function mysqlDateTime(?string $value): ?string
 {
     if ($value === null || $value === '') return null;
@@ -171,14 +187,16 @@ function publicUser(array $user): array
 {
     $created = (string) ($user['created_at'] ?? gmdate('Y-m-d H:i:s'));
     $updated = (string) ($user['updated_at'] ?? $created);
+    $verified = !empty($user['email_verified']);
+    $verifiedAt = $verified ? (string) ($user['verified_at'] ?? $created) : null;
     return [
         'id' => $user['id'],
         'aud' => 'authenticated',
         'role' => 'authenticated',
         'email' => $user['email'],
-        'email_confirmed_at' => $created,
+        'email_confirmed_at' => $verifiedAt,
         'phone' => $user['phone'] ?? '',
-        'confirmed_at' => $created,
+        'confirmed_at' => $verifiedAt,
         'last_sign_in_at' => $updated,
         'app_metadata' => ['provider' => 'email', 'providers' => ['email']],
         'user_metadata' => [
@@ -189,6 +207,49 @@ function publicUser(array $user): array
         'created_at' => $created,
         'updated_at' => $updated,
     ];
+}
+
+function generateOtpCode(): string
+{
+    return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+}
+
+function issueOtp(string $userId): string
+{
+    $code = generateOtpCode();
+    $stmt = database()->prepare('UPDATE users SET otp_hash = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE), otp_attempts = 0, otp_last_sent_at = NOW() WHERE id = ?');
+    $stmt->execute([hash('sha256', $code), $userId]);
+    return $code;
+}
+
+function sendOtpEmail(array $user, string $code): array
+{
+    global $config;
+    $smtp = $config['smtp'] ?? [];
+    $subject = 'Your SukatAI verification code';
+    $text = "Hi,\n\nYour SukatAI verification code is {$code}.\n\nThis code expires in 10 minutes. If you did not request it, you can ignore this email.\n\n- SukatAI";
+    $safeCode = htmlspecialchars($code, ENT_QUOTES, 'UTF-8');
+    $html = '<div style="font-family:Arial,Helvetica,sans-serif;color:#111;">'
+        . '<p>Hi,</p>'
+        . '<p>Your SukatAI verification code is:</p>'
+        . '<p style="font-size:28px;font-weight:bold;letter-spacing:4px;">' . $safeCode . '</p>'
+        . '<p>This code expires in 10 minutes. If you did not request it, you can ignore this email.</p>'
+        . '<p>&mdash; SukatAI</p>'
+        . '</div>';
+    return sendMailViaSmtp($smtp, $user['email'], $subject, $text, $html);
+}
+
+function devCodeAllowed(array $sendResult): bool
+{
+    global $config;
+    return (!($config['is_production'] ?? false)) && ($sendResult['status'] ?? '') === 'not_configured';
+}
+
+function otpVerificationPayload(string $email, array $sendResult, string $code): array
+{
+    $p = ['email' => $email, 'expires_in_seconds' => 600, 'delivery' => $sendResult['status'] ?? 'unknown'];
+    if (devCodeAllowed($sendResult)) $p['dev_code'] = $code;
+    return $p;
 }
 
 function sessionPayload(array $user): array
@@ -214,6 +275,7 @@ function profileResponse(array $user): array
         'last_name' => $user['last_name'],
         'email' => $user['email'],
         'phone' => $user['phone'] ?? null,
+        'email_verified' => !empty($user['email_verified']),
         'email_notifications' => array_key_exists('email_notifications', $user) ? booleanInput($user['email_notifications']) : true,
         'sms_notifications' => array_key_exists('sms_notifications', $user) ? booleanInput($user['sms_notifications']) : false,
         'avatar_url' => $user['avatar_url'],
@@ -587,7 +649,7 @@ function invitationRedirectUrl(?string $value): string
     $requestOriginValue = strtolower(requestOrigin());
     global $config;
     $canonicalParts = parse_url($config['public_app_url']);
-    $canonicalOrigin = strtolower(($canonicalParts['scheme'] ?? 'https') . '://' . ($canonicalParts['host'] ?? 'sukat-ai-app.vercel.app') . (isset($canonicalParts['port']) ? ':' . $canonicalParts['port'] : ''));
+    $canonicalOrigin = strtolower(($canonicalParts['scheme'] ?? 'http') . '://' . ($canonicalParts['host'] ?? '127.0.0.1') . (isset($canonicalParts['port']) ? ':' . $canonicalParts['port'] : ''));
     $localOrigin = (bool) preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i', $origin);
     if ($localOrigin) {
         $path = $parts['path'] ?? '/';
@@ -647,6 +709,11 @@ try {
             $statement->execute([$email]);
             $user = $statement->fetch() ?: null;
             if (!$user || !password_verify($password, $user['password_hash'])) throw new SukatApiException('The email or password is incorrect.', 401);
+            if (empty($user['email_verified'])) {
+                $code = issueOtp($user['id']);
+                $send = sendOtpEmail($user, $code);
+                jsonResponse(['session' => null, 'user' => publicUser($user), 'verification' => otpVerificationPayload($user['email'], $send, $code)]);
+            }
             session_regenerate_id(true);
             $_SESSION['user_id'] = $user['id'];
             jsonResponse(['session' => sessionPayload($user), 'user' => publicUser($user)]);
@@ -669,14 +736,59 @@ try {
                 if ((string) $error->getCode() === '23000') throw new SukatApiException('An account with that email already exists.', 409);
                 throw $error;
             }
-            $user = currentUser();
-            if ($user) unset($_SESSION['user_id']);
             $statement = database()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
             $statement->execute([$id]);
             $user = $statement->fetch();
+            $code = issueOtp($id);
+            $send = sendOtpEmail($user, $code);
+            jsonResponse(['session' => null, 'user' => publicUser($user), 'verification' => otpVerificationPayload($email, $send, $code)]);
+        }
+
+        case 'verify_otp': {
+            $data = requestData();
+            $email = strtolower(stringInput($data, 'email', '') ?? '');
+            $code = stringInput($data, 'code', '') ?? '';
+            if ($email === '' || $code === '') throw new SukatApiException('Enter your email and verification code.', 400);
+            $statement = database()->prepare('SELECT id, otp_hash, otp_attempts, (otp_expires_at > NOW()) AS not_expired FROM users WHERE email = ? LIMIT 1');
+            $statement->execute([$email]);
+            $row = $statement->fetch();
+            if (!$row || empty($row['otp_hash'])) throw new SukatApiException('Request a new verification code.', 400);
+            if (empty($row['not_expired'])) {
+                $statement = database()->prepare('UPDATE users SET otp_hash = NULL, otp_expires_at = NULL, otp_attempts = 0 WHERE id = ?');
+                $statement->execute([$row['id']]);
+                throw new SukatApiException('That code has expired. Request a new one.', 400);
+            }
+            if ((int) $row['otp_attempts'] >= 5) throw new SukatApiException('Too many attempts. Request a new verification code.', 429);
+            if (!hash_equals((string) $row['otp_hash'], hash('sha256', $code))) {
+                $statement = database()->prepare('UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = ?');
+                $statement->execute([$row['id']]);
+                throw new SukatApiException('That code is incorrect.', 400);
+            }
+            $statement = database()->prepare('UPDATE users SET email_verified = 1, verified_at = NOW(), otp_hash = NULL, otp_expires_at = NULL, otp_attempts = 0 WHERE id = ?');
+            $statement->execute([$row['id']]);
+            $statement = database()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
+            $statement->execute([$row['id']]);
+            $user = $statement->fetch();
             session_regenerate_id(true);
-            $_SESSION['user_id'] = $id;
+            $_SESSION['user_id'] = $row['id'];
             jsonResponse(['session' => sessionPayload($user), 'user' => publicUser($user)]);
+        }
+
+        case 'resend_otp': {
+            $data = requestData();
+            $email = strtolower(stringInput($data, 'email', '') ?? '');
+            $statement = database()->prepare('SELECT id, email_verified, (otp_last_sent_at IS NULL OR otp_last_sent_at < DATE_SUB(NOW(), INTERVAL 45 SECOND)) AS can_send FROM users WHERE email = ? LIMIT 1');
+            $statement->execute([$email]);
+            $row = $statement->fetch();
+            if ($row && empty($row['email_verified']) && !empty($row['can_send'])) {
+                $statement = database()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
+                $statement->execute([$row['id']]);
+                $user = $statement->fetch();
+                $code = issueOtp($row['id']);
+                $send = sendOtpEmail($user, $code);
+                jsonResponse(['ok' => true, 'verification' => otpVerificationPayload($email, $send, $code)]);
+            }
+            jsonResponse(['ok' => true, 'verification' => ['email' => $email, 'expires_in_seconds' => 600, 'delivery' => 'throttled']]);
         }
 
         case 'sign_out':
@@ -899,6 +1011,7 @@ try {
                 if (array_key_exists($field, $data)) {
                     $value = stringInput($data, $field);
                     if ($field === 'status' && !in_array($value, ['draft', 'uploaded', 'processing_queued', 'processing', 'ready_to_share', 'ready_for_review', 'verified', 'needs_recapture', 'failed'], true)) throw new SukatApiException('The scan status is invalid.', 400);
+                    if ($field === 'status' && $isCustomer && $value === 'processing_queued' && $scan['status'] === 'processing') throw new SukatApiException('This scan is already being processed. Wait for the current result or retry it from the processing screen.', 409);
                     if ($field === 'status' && $isCustomer && $value === 'ready_for_review' && $value !== $scan['status'] && $scan['status'] !== 'ready_to_share') throw new SukatApiException('This result can only be shared after processing is complete.', 403);
                     if ($field === 'status' && $value !== $scan['status']) {
                         $allowedStatuses = $isCustomer ? ['draft', 'uploaded', 'processing_queued', 'ready_for_review', 'needs_recapture'] : ['verified', 'needs_recapture'];
@@ -1067,9 +1180,17 @@ try {
             if ($scan['status'] !== 'verified') throw new SukatApiException('Only verified measurements can be attached to an order.', 400);
             $garment = stringInput($data, 'garment_type', '') ?? '';
             if (strlen($garment) < 2) throw new SukatApiException('Enter a garment type.', 400);
+            $statement = database()->prepare("SELECT id FROM orders WHERE customer_id = ? AND scan_id = ? AND status IN ('new', 'accepted', 'in_production', 'for_fitting', 'ready_for_pickup') LIMIT 1");
+            $statement->execute([$user['id'], $scanId]);
+            if ($statement->fetch()) throw new SukatApiException('This measurement set already has an active order. Complete or cancel that order before creating another.', 409);
             $id = uuid();
             $statement = database()->prepare('INSERT INTO orders (id, customer_id, organization_id, scan_id, status, garment_type, notes) VALUES (?, ?, ?, ?, ?, ?, ?)');
-            $statement->execute([$id, $user['id'], $user['organization_id'], $scanId, 'new', substr($garment, 0, 120), stringInput($data, 'notes')]);
+            try {
+                $statement->execute([$id, $user['id'], $user['organization_id'], $scanId, 'new', substr($garment, 0, 120), stringInput($data, 'notes')]);
+            } catch (PDOException $error) {
+                if ((string) $error->getCode() === '23000') throw new SukatApiException('This measurement set already has an active order. Complete or cancel that order before creating another.', 409);
+                throw $error;
+            }
             $statement = database()->prepare('SELECT * FROM orders WHERE id = ? LIMIT 1');
             $statement->execute([$id]);
             jsonResponse(orderResponse($statement->fetch()));
@@ -1087,6 +1208,7 @@ try {
             $status = stringInput($data, 'status', '') ?? '';
             if (!in_array($status, ['new', 'accepted', 'in_production', 'for_fitting', 'ready_for_pickup', 'completed', 'cancelled'], true)) throw new SukatApiException('The order status is invalid.', 400);
             if ($order['customer_id'] === $user['id'] && $status !== $order['status']) throw new SukatApiException('Only your dressmaker can update the production status.', 403);
+            if (!isAllowedOrderTransition($order['status'], $status)) throw new SukatApiException('That order status change is not available from the current stage.', 409);
             $statement = database()->prepare('UPDATE orders SET status = ?, updated_at = NOW() WHERE id = ? AND status = ?');
             $statement->execute([$status, $orderId, $order['status']]);
             if ($statement->rowCount() > 0 && $status === 'ready_for_pickup' && $order['status'] !== $status) {
@@ -1209,6 +1331,48 @@ try {
             jsonResponse(true);
         }
 
+        case 'delete_scan': {
+            $user = requireUser();
+            $data = requestData();
+            $scanId = stringInput($data, 'scan_id', '') ?? '';
+            $scan = findScan($scanId);
+            if (!$scan) throw new SukatApiException('Scan not found.', 404);
+            if ($scan['customer_id'] !== $user['id'] && !isAdmin($user)) throw new SukatApiException('You cannot remove this scan.', 403);
+            if (!in_array($scan['status'], ['draft', 'failed'], true)) throw new SukatApiException('Only draft or failed scans can be removed.', 409);
+            $statement = database()->prepare('SELECT id FROM orders WHERE scan_id = ? LIMIT 1');
+            $statement->execute([$scanId]);
+            if ($statement->fetch()) throw new SukatApiException('This scan is attached to an order and cannot be removed.', 409);
+            $statement = database()->prepare('SELECT storage_path FROM scan_assets WHERE scan_id = ?');
+            $statement->execute([$scanId]);
+            $assets = $statement->fetchAll();
+            $statement = database()->prepare('SELECT model_url_or_path FROM body_models WHERE scan_id = ? LIMIT 1');
+            $statement->execute([$scanId]);
+            $model = $statement->fetch() ?: null;
+            foreach ($assets as $asset) {
+                try { $file = safeStorageFile($asset['storage_path']); if (is_file($file)) unlink($file); } catch (SukatApiException $error) { if ($error->status !== 404) throw $error; }
+            }
+            if (!empty($model['model_url_or_path']) && !preg_match('/^https?:\/\//i', $model['model_url_or_path']) && $model['model_url_or_path'] !== 'local-reference-3d-body-scan') {
+                try { $file = safeStorageFile($model['model_url_or_path']); if (is_file($file)) unlink($file); } catch (SukatApiException $error) { if ($error->status !== 404) throw $error; }
+            }
+            $db = database();
+            $db->beginTransaction();
+            try {
+                $db->prepare('DELETE FROM measurement_review_events WHERE scan_id = ?')->execute([$scanId]);
+                $db->prepare('DELETE FROM measurements WHERE scan_id = ?')->execute([$scanId]);
+                $db->prepare('DELETE FROM body_models WHERE scan_id = ?')->execute([$scanId]);
+                $db->prepare('DELETE FROM scan_assets WHERE scan_id = ?')->execute([$scanId]);
+                $db->prepare('DELETE FROM scan_processing_attempts WHERE scan_id = ?')->execute([$scanId]);
+                $statement = $db->prepare("DELETE FROM scans WHERE id = ? AND status IN ('draft', 'failed')");
+                $statement->execute([$scanId]);
+                if ($statement->rowCount() !== 1) throw new SukatApiException('The scan changed before it could be removed.', 409);
+                $db->commit();
+            } catch (Throwable $error) {
+                if ($db->inTransaction()) $db->rollBack();
+                throw $error;
+            }
+            jsonResponse(true);
+        }
+
         case 'signed_url': {
             $user = requireUser();
             $data = requestData();
@@ -1257,6 +1421,10 @@ try {
             header('Content-Type: ' . $mime);
             header('Content-Length: ' . filesize($file));
             header('Content-Disposition: inline; filename="' . basename($file) . '"');
+            // Mirror the Node asset route: prevent MIME sniffing and disallow any
+            // active content from being interpreted out of a stored upload.
+            header('X-Content-Type-Options: nosniff');
+            header("Content-Security-Policy: default-src 'none'; sandbox");
             readfile($file);
             exit;
         }
@@ -1266,6 +1434,14 @@ try {
             $data = requestData();
             $scan = requireScan(stringInput($data, 'scan_id', '') ?? '', $user);
             $processingScanId = $scan['id'];
+            if (in_array($scan['status'], ['ready_to_share', 'ready_for_review', 'verified'], true)) {
+                jsonResponse(['status' => $scan['status'], 'message' => $scan['status'] === 'ready_to_share' ? 'Your scan result is ready to review and share.' : 'Your scan result is already ready for review.']);
+            }
+            // A second browser request must not create a second synchronous
+            // local attempt while the first request is still processing.
+            if ($scan['status'] === 'processing' && strtotime((string) ($scan['updated_at'] ?? '')) > time() - 600) {
+                jsonResponse(['status' => 'processing', 'progress' => (int) ($scan['processing_progress'] ?? 0), 'progress_reported' => booleanInput($scan['processing_progress_reported'] ?? false), 'message' => 'Your scan is already being processed.']);
+            }
             $statement = database()->prepare('SELECT * FROM scan_assets WHERE scan_id = ?');
             $statement->execute([$scan['id']]);
             $assets = $statement->fetchAll();
@@ -1287,12 +1463,15 @@ try {
                 $statement->execute(['failed', $message, $message, $scan['id']]);
                 jsonResponse(['status' => 'failed', 'message' => $message], 503);
             }
-            $statement = database()->prepare("UPDATE scans SET status = ?, processing_status = 'processing', processing_progress = 25, processing_provider = ?, processing_attempts = COALESCE(processing_attempts, 0) + 1, processing_started_at = NOW(), processing_completed_at = NULL, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND (status IN ('uploaded', 'processing_queued', 'failed', 'draft') OR (status = 'processing' AND updated_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)))");
+            $statement = database()->prepare("UPDATE scans SET status = ?, processing_status = 'processing', processing_progress = 25, processing_provider = ?, processing_attempt_id = NULL, processing_attempts = COALESCE(processing_attempts, 0) + 1, processing_started_at = NOW(), processing_completed_at = NULL, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = NOW() WHERE id = ? AND (status IN ('uploaded', 'processing_queued', 'failed', 'draft') OR (status = 'processing' AND updated_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)))");
             $statement->execute(['processing', 'local', $scan['id']]);
             if ($statement->rowCount() === 0) {
                 $current = findScan($scan['id']);
                 if (!$current || $current['status'] !== 'processing') {
                     jsonResponse(['status' => $current['status'] ?? $scan['status'], 'message' => 'This scan is already being processed or is not ready to process.']);
+                }
+                if (strtotime((string) ($current['updated_at'] ?? '')) > time() - 600) {
+                    jsonResponse(['status' => 'processing', 'progress' => (int) ($current['processing_progress'] ?? 0), 'progress_reported' => booleanInput($current['processing_progress_reported'] ?? false), 'message' => 'Your scan is already being processed.']);
                 }
             }
             $attemptNumber = max(1, (int) ($scan['processing_attempts'] ?? 0) + 1);

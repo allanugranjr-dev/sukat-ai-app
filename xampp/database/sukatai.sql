@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS `users` (
   `unit_system` VARCHAR(10) NOT NULL DEFAULT 'cm',
   `reset_token_hash` CHAR(64) NULL,
   `reset_expires_at` DATETIME NULL,
+  `email_verified` TINYINT(1) NOT NULL DEFAULT 0,
+  `verified_at` DATETIME NULL,
+  `otp_hash` CHAR(64) NULL,
+  `otp_expires_at` DATETIME NULL,
+  `otp_attempts` TINYINT NOT NULL DEFAULT 0,
+  `otp_last_sent_at` DATETIME NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -179,11 +185,13 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `garment_type` VARCHAR(120) NOT NULL,
   `due_date` DATE NULL,
   `notes` TEXT NULL,
+  `open_scan_key` VARCHAR(80) GENERATED ALWAYS AS (CASE WHEN `status` IN ('new', 'accepted', 'in_production', 'for_fitting', 'ready_for_pickup') AND `scan_id` IS NOT NULL THEN CONCAT(`customer_id`, ':', `scan_id`) ELSE NULL END) PERSISTENT,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `orders_customer_idx` (`customer_id`, `created_at`),
-  KEY `orders_org_status_idx` (`organization_id`, `status`)
+  KEY `orders_org_status_idx` (`organization_id`, `status`),
+  UNIQUE KEY `orders_open_scan_unique` (`open_scan_key`)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS `fittings` (

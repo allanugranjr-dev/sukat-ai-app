@@ -1,63 +1,36 @@
-import type { AuthResponse, Session, User } from "@supabase/supabase-js";
-import { isLocalApiMode, publicAppOrigin, requireSupabase, readableError } from "./supabase";
+import { type AuthResponse, type Session, type User } from "./supabase";
 import { notifyXamppAuthStateChange, subscribeToXamppAuthState, xamppRequest } from "./xampp";
 import type { Invitation, Notification, Organization, Profile, Role } from "./types";
 
+export type VerificationInfo = { email: string; expires_in_seconds: number; delivery: string; dev_code?: string };
+
 type XamppAuthPayload = { session: Session; user: User };
 
-async function readableFunctionError(error: unknown): Promise<string> {
-  if (typeof error === "object" && error !== null && "context" in error) {
-    const context = (error as { context?: unknown }).context;
-    if (context && typeof context === "object" && "clone" in context && typeof (context as { clone?: unknown }).clone === "function") {
-      try {
-        const response = await (context as { clone: () => Response }).clone();
-        const payload = await response.json() as { error?: unknown; message?: unknown };
-        const message = payload.error ?? payload.message;
-        if (typeof message === "string" && message.trim()) return message;
-      } catch {
-        // Fall through to the SDK error message when the response is not JSON.
-      }
-    }
-  }
-  return readableError(error);
-}
+// Sign-in / sign-up can now return a null session when the account still needs
+// email verification, in which case a `verification` payload is present.
+type AuthOrVerification = { session: Session | null; user: User; verification?: VerificationInfo };
 
-function xamppAuthResponse(payload: XamppAuthPayload): AuthResponse {
+function xamppAuthResponse(payload: { session: Session | null; user: User }): AuthResponse {
   return { data: { session: payload.session, user: payload.user }, error: null } as AuthResponse;
 }
 
 export async function getSession(): Promise<Session | null> {
-  if (isLocalApiMode) return xamppRequest<Session | null>("session");
-  const { data, error } = await requireSupabase().auth.getSession();
-  if (error) throw new Error(readableError(error));
-  return data.session;
+  return xamppRequest<Session | null>("session");
 }
 
 export function onAuthStateChange(callback: (event: string, session: Session | null) => void): () => void {
-  if (isLocalApiMode) return subscribeToXamppAuthState((event, session) => callback(event, session));
-  const { data } = requireSupabase().auth.onAuthStateChange((event, nextSession) => callback(event, nextSession));
-  return () => data.subscription.unsubscribe();
+  return subscribeToXamppAuthState((event, session) => callback(event, session));
 }
 
 export async function getProfile(userId: string): Promise<Profile> {
-  if (isLocalApiMode) {
-    void userId;
-    return xamppRequest<Profile>("profile");
-  }
-  const { data, error } = await requireSupabase().from("profiles").select("*").eq("id", userId).single();
-  if (error) throw new Error(readableError(error));
-  return data as Profile;
+  void userId;
+  return xamppRequest<Profile>("profile");
 }
 
-export async function signIn(email: string, password: string): Promise<AuthResponse> {
-  if (isLocalApiMode) {
-    const payload = await xamppRequest<XamppAuthPayload>("sign_in", { body: { email: email.trim(), password } });
-    notifyXamppAuthStateChange("SIGNED_IN", payload.session);
-    return xamppAuthResponse(payload);
-  }
-  const response = await requireSupabase().auth.signInWithPassword({ email: email.trim(), password });
-  if (response.error) throw new Error(readableError(response.error));
-  return response;
+export async function signIn(email: string, password: string): Promise<AuthResponse & { verification?: VerificationInfo }> {
+  const payload = await xamppRequest<AuthOrVerification>("sign_in", { body: { email: email.trim(), password } });
+  if (payload.session) notifyXamppAuthStateChange("SIGNED_IN", payload.session);
+  return { ...xamppAuthResponse({ session: payload.session, user: payload.user }), verification: payload.verification };
 }
 
 export async function signUpCustomer(input: {
@@ -65,138 +38,70 @@ export async function signUpCustomer(input: {
   lastName: string;
   email: string;
   password: string;
-}): Promise<AuthResponse> {
-  if (isLocalApiMode) {
-    const payload = await xamppRequest<XamppAuthPayload>("sign_up", {
-      body: {
-        first_name: input.firstName.trim(),
-        last_name: input.lastName.trim(),
-        email: input.email.trim(),
-        password: input.password,
-      },
-    });
-    notifyXamppAuthStateChange("SIGNED_IN", payload.session);
-    return xamppAuthResponse(payload);
-  }
-  const response = await requireSupabase().auth.signUp({
-    email: input.email.trim(),
-    password: input.password,
-    options: {
-      emailRedirectTo: `${publicAppOrigin()}/?verify=1`,
-      data: {
-        first_name: input.firstName.trim(),
-        last_name: input.lastName.trim(),
-      },
+}): Promise<AuthResponse & { verification?: VerificationInfo }> {
+  const payload = await xamppRequest<AuthOrVerification>("sign_up", {
+    body: {
+      first_name: input.firstName.trim(),
+      last_name: input.lastName.trim(),
+      email: input.email.trim(),
+      password: input.password,
     },
   });
-  if (response.error) throw new Error(readableError(response.error));
-  return response;
+  if (payload.session) notifyXamppAuthStateChange("SIGNED_IN", payload.session);
+  return { ...xamppAuthResponse({ session: payload.session, user: payload.user }), verification: payload.verification };
 }
 
-export async function resendSignupConfirmation(email: string): Promise<void> {
-  if (isLocalApiMode) {
-    throw new Error("Local mode does not send verification emails. Sign in with your local account instead.");
-  }
-  const { error } = await requireSupabase().auth.resend({
-    type: "signup",
-    email: email.trim(),
-    options: {
-      emailRedirectTo: `${publicAppOrigin()}/?verify=1`,
-    },
-  });
-  if (error) throw new Error(readableError(error));
+export async function verifyEmailOtp(email: string, code: string): Promise<AuthResponse> {
+  const payload = await xamppRequest<XamppAuthPayload>("verify_otp", { body: { email: email.trim(), code: code.trim() } });
+  notifyXamppAuthStateChange("SIGNED_IN", payload.session);
+  return xamppAuthResponse(payload);
+}
+
+export async function resendSignupConfirmation(email: string): Promise<VerificationInfo | null> {
+  const payload = await xamppRequest<{ ok?: boolean; verification?: VerificationInfo }>("resend_otp", { body: { email: email.trim() } });
+  return payload.verification ?? null;
 }
 
 export async function sendPasswordReset(email: string): Promise<void> {
-  if (isLocalApiMode) {
-    await xamppRequest("password_reset_request", { body: { email: email.trim() } });
-    return;
-  }
-  const { error } = await requireSupabase().auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: `${publicAppOrigin()}/?reset=1`,
-  });
-  if (error) throw new Error(readableError(error));
+  await xamppRequest("password_reset_request", { body: { email: email.trim() } });
 }
 
 export async function updatePassword(password: string): Promise<User> {
-  if (isLocalApiMode) return xamppRequest<User>("password_update", { body: { password } });
-  const { data, error } = await requireSupabase().auth.updateUser({ password });
-  if (error) throw new Error(readableError(error));
-  return data.user;
+  return xamppRequest<User>("password_update", { body: { password } });
 }
 
 export async function signOut(): Promise<void> {
-  if (isLocalApiMode) {
-    await xamppRequest("sign_out", { body: {} });
-    notifyXamppAuthStateChange("SIGNED_OUT", null);
-    return;
-  }
-  const { error } = await requireSupabase().auth.signOut();
-  if (error) throw new Error(readableError(error));
+  await xamppRequest("sign_out", { body: {} });
+  notifyXamppAuthStateChange("SIGNED_OUT", null);
 }
 
 export async function updateProfile(
   userId: string,
   updates: Pick<Profile, "first_name" | "last_name" | "phone" | "email_notifications" | "sms_notifications" | "unit_system">,
 ): Promise<Profile> {
-  if (isLocalApiMode) {
-    void userId;
-    return xamppRequest<Profile>("profile_update", { body: updates });
-  }
-  const { data, error } = await requireSupabase().from("profiles").update(updates).eq("id", userId).select("*").single();
-  if (error) throw new Error(readableError(error));
-  return data as Profile;
+  void userId;
+  return xamppRequest<Profile>("profile_update", { body: updates });
 }
 
 export async function assignProfileOrganization(profileId: string, organizationId: string | null): Promise<Profile> {
-  if (isLocalApiMode) return xamppRequest<Profile>("assign_profile_organization", { body: { profile_id: profileId, organization_id: organizationId } });
-  const { data, error } = await requireSupabase().from("profiles").update({ organization_id: organizationId }).eq("id", profileId).select("*").single();
-  if (error) throw new Error(readableError(error));
-  return data as Profile;
+  return xamppRequest<Profile>("assign_profile_organization", { body: { profile_id: profileId, organization_id: organizationId } });
 }
 
 export async function getNotifications(userId: string): Promise<Notification[]> {
-  if (isLocalApiMode) {
-    void userId;
-    return xamppRequest<Notification[]>("notifications");
-  }
-  const { data, error } = await requireSupabase()
-    .from("notifications")
-    .select("*")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(20);
-  if (error) throw new Error(readableError(error));
-  return (data ?? []) as Notification[];
+  void userId;
+  return xamppRequest<Notification[]>("notifications");
 }
 
 export async function markNotificationRead(notificationId: string): Promise<void> {
-  if (isLocalApiMode) {
-    await xamppRequest("mark_notification_read", { body: { notification_id: notificationId } });
-    return;
-  }
-  const client = requireSupabase();
-  const { data: userData, error: userError } = await client.auth.getUser();
-  if (userError || !userData.user) throw new Error(readableError(userError ?? new Error("Authentication is required.")));
-  const { error } = await client.from("notifications").update({ read_at: new Date().toISOString() }).eq("id", notificationId).eq("user_id", userData.user.id);
-  if (error) throw new Error(readableError(error));
+  await xamppRequest("mark_notification_read", { body: { notification_id: notificationId } });
 }
 
 export async function listOrganizations(): Promise<Organization[]> {
-  if (isLocalApiMode) return xamppRequest<Organization[]>("organizations");
-  const { data, error } = await requireSupabase().from("organizations").select("*").order("name");
-  if (error) throw new Error(readableError(error));
-  return (data ?? []) as Organization[];
+  return xamppRequest<Organization[]>("organizations");
 }
 
 export async function listInvitations(): Promise<Invitation[]> {
-  if (isLocalApiMode) return xamppRequest<Invitation[]>("invitations");
-  const { data, error } = await requireSupabase()
-    .from("dressmaker_invitations")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(readableError(error));
-  return (data ?? []) as Invitation[];
+  return xamppRequest<Invitation[]>("invitations");
 }
 
 export async function inviteDressmaker(input: {
@@ -204,41 +109,16 @@ export async function inviteDressmaker(input: {
   organizationId: string;
   redirectTo: string;
 }): Promise<{ invitationId: string; inviteUrl: string | null; emailStatus: string; emailError: string | null }> {
-  if (isLocalApiMode) {
-    const payload = await xamppRequest<{ invitation_id: string; invite_url?: string; email_status?: string; email_error?: string | null }>("invite_dressmaker", {
-      body: { email: input.email.trim(), organization_id: input.organizationId, redirect_to: input.redirectTo },
-    });
-    return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null, emailStatus: payload.email_status ?? "not_configured", emailError: payload.email_error ?? null };
-  }
-  const { data, error } = await requireSupabase().functions.invoke("invite-dressmaker", {
-    body: input,
+  const payload = await xamppRequest<{ invitation_id: string; invite_url?: string; email_status?: string; email_error?: string | null }>("invite_dressmaker", {
+    body: { email: input.email.trim(), organization_id: input.organizationId, redirect_to: input.redirectTo },
   });
-  if (error) throw new Error(await readableFunctionError(error));
-  const payload = data as { invitation_id?: string; invite_url?: string; email_status?: string; email_error?: string | null } | null;
-  if (!payload?.invitation_id) throw new Error("The invitation service returned an incomplete response.");
-  return {
-    invitationId: payload.invitation_id,
-    inviteUrl: payload.invite_url ?? null,
-    emailStatus: payload.email_status ?? "sent",
-    emailError: payload.email_error ?? null,
-  };
+  return { invitationId: payload.invitation_id, inviteUrl: payload.invite_url ?? null, emailStatus: payload.email_status ?? "not_configured", emailError: payload.email_error ?? null };
 }
 
 export async function revokeDressmakerInvitation(invitationId: string): Promise<void> {
   const id = invitationId.trim();
   if (!id) throw new Error("A valid invitation ID is required.");
-  if (isLocalApiMode) {
-    await xamppRequest("revoke_dressmaker_invitation", { body: { invitation_id: id } });
-    return;
-  }
-  const { data, error } = await requireSupabase().functions.invoke("revoke-dressmaker-invitation", {
-    body: { invitation_id: id },
-  });
-  if (error) throw new Error(await readableFunctionError(error));
-  const payload = data as { removed?: boolean; already_removed?: boolean; revoked?: boolean; already_revoked?: boolean } | null;
-  if (!payload?.removed && !payload?.already_removed && !payload?.revoked && !payload?.already_revoked) {
-    throw new Error("The invitation service returned an incomplete response.");
-  }
+  await xamppRequest("revoke_dressmaker_invitation", { body: { invitation_id: id } });
 }
 
 export async function acceptDressmakerInvitation(input: {
@@ -246,20 +126,10 @@ export async function acceptDressmakerInvitation(input: {
   firstName: string;
   lastName: string;
 }): Promise<void> {
-  if (isLocalApiMode) {
-    const payload = await xamppRequest<{ accepted?: boolean }>("accept_dressmaker_invitation", {
-      body: { token: input.token, first_name: input.firstName.trim(), last_name: input.lastName.trim() },
-    });
-    if (!payload.accepted) throw new Error("This invitation could not be accepted.");
-    return;
-  }
-  const { data, error } = await requireSupabase().functions.invoke("accept-dressmaker-invitation", {
-    body: input,
+  const payload = await xamppRequest<{ accepted?: boolean }>("accept_dressmaker_invitation", {
+    body: { token: input.token, first_name: input.firstName.trim(), last_name: input.lastName.trim() },
   });
-  if (error) throw new Error(await readableFunctionError(error));
-  if (!(data as { accepted?: boolean } | null)?.accepted) {
-    throw new Error("This invitation could not be accepted.");
-  }
+  if (!payload.accepted) throw new Error("This invitation could not be accepted.");
 }
 
 export function isRole(value: unknown): value is Role {

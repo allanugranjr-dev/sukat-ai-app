@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const projectRoot = path.resolve(serverDirectory, "..");
-export const canonicalAppUrl = "https://sukat-ai-app.vercel.app";
+export const canonicalAppUrl = "http://127.0.0.1:5173";
 
 // Load the Node-specific files without touching the existing Supabase/XAMPP env files.
 for (const fileName of [".env.node", ".env.node.local"]) {
@@ -21,8 +21,28 @@ function listEnv(name, fallback) {
   return value ? value.split(",").map((item) => item.trim()).filter(Boolean) : fallback;
 }
 
+const nodeEnv = process.env.NODE_ENV ?? "development";
+const isProduction = nodeEnv === "production";
+
+// Localhost development origins are only trusted outside production. In a
+// production deployment the credentialed CORS allowlist must be limited to the
+// explicit origins configured through SUKATAI_WEB_ORIGINS.
+const localDevOrigins = [
+  "http://127.0.0.1:3000",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173",
+  "http://localhost:5173",
+  "http://127.0.0.1:5174",
+  "http://localhost:5174",
+  "http://127.0.0.1:3001",
+  "http://localhost:3001",
+  "http://127.0.0.1:3002",
+  "http://localhost:3002",
+];
+
 export const config = {
-  nodeEnv: process.env.NODE_ENV ?? "development",
+  nodeEnv,
+  isProduction,
   port: numberEnv("PORT", 3001),
   db: {
     host: process.env.SUKATAI_DB_HOST ?? "127.0.0.1",
@@ -41,7 +61,10 @@ export const config = {
     provider: (process.env.RECONSTRUCTION_PROVIDER ?? "ai-service").trim().toLowerCase(),
     apiUrl: (process.env.RECONSTRUCTION_API_URL ?? process.env.AI_SERVICE_URL ?? "").trim().replace(/\/$/, ""),
     apiKey: (process.env.RECONSTRUCTION_API_KEY ?? process.env.AI_SERVICE_API_KEY ?? "").trim(),
-    timeoutMs: numberEnv("RECONSTRUCTION_TIMEOUT_MS", 120000),
+    // CPU-only Anny fitting can take several minutes on the supported
+    // low-end laptop. Keep the gateway alive long enough to receive the
+    // provider result; deployments can still override this value.
+    timeoutMs: numberEnv("RECONSTRUCTION_TIMEOUT_MS", 600000),
     maxModelBytes: numberEnv("RECONSTRUCTION_MAX_MODEL_BYTES", 25 * 1024 * 1024),
   },
   sessionHours: numberEnv("SUKATAI_SESSION_HOURS", 24),
@@ -55,20 +78,31 @@ export const config = {
     twilioFromNumber: (process.env.TWILIO_FROM_NUMBER ?? "").trim(),
     publicAppUrl: (process.env.SUKATAI_PUBLIC_APP_URL ?? canonicalAppUrl).trim().replace(/\/$/, ""),
   },
-  allowedOrigins: listEnv("SUKATAI_WEB_ORIGINS", [
-    canonicalAppUrl,
-    "http://127.0.0.1:3000",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-    "http://127.0.0.1:3001",
-    "http://localhost:3001",
-    "http://127.0.0.1:3002",
-    "http://localhost:3002",
-  ]),
-  cookieSecure: process.env.SUKATAI_COOKIE_SECURE === "true",
+  allowedOrigins: listEnv(
+    "SUKATAI_WEB_ORIGINS",
+    isProduction ? [canonicalAppUrl] : [canonicalAppUrl, ...localDevOrigins],
+  ),
+  // The session cookie must ship with Secure in production so it is never sent
+  // over plaintext HTTP. It can be forced on/off explicitly, but the safe
+  // default outside development is enabled.
+  cookieSecure:
+    process.env.SUKATAI_COOKIE_SECURE === "true"
+      ? true
+      : process.env.SUKATAI_COOKIE_SECURE === "false"
+        ? false
+        : isProduction,
   cookieSameSite: process.env.SUKATAI_COOKIE_SAMESITE === "None" ? "None" : "Lax",
 };
+
+// A production deployment must never fall back to the passwordless root
+// default. Fail fast so a misconfigured environment cannot expose the database
+// with well-known credentials.
+if (isProduction && !config.db.password) {
+  throw new Error(
+    "Refusing to start in production without an explicit SUKATAI_DB_PASS. " +
+      "Configure a least-privilege database account and password.",
+  );
+}
 
 export function safeDatabaseIdentifier(value) {
   if (!/^[a-zA-Z0-9_$-]+$/.test(value)) throw new Error("Invalid database identifier.");

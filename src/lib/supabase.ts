@@ -1,39 +1,49 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+// Local-only backend boundary.
+//
+// SukatAI previously supported a hosted Supabase runtime alongside the local
+// Node.js / XAMPP API. The Supabase path has been removed — the app now always
+// talks to the local API adapter. This module keeps the small set of exports
+// the rest of the app depends on (backend-mode flags, origin helpers, error
+// formatting, and the auth type shims that used to come from
+// @supabase/supabase-js) so no other file needs a dependency on the SDK.
 
-const url = (import.meta.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-const anonKey = (import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+const canonicalAppOrigin = "http://127.0.0.1:5173";
+
+// The app runs against the local Node.js / XAMPP API in every build now.
+// `xampp` mode targets the PHP runtime; anything else uses the Node runtime.
 const configuredBackendMode = (import.meta.env.VITE_BACKEND_MODE ?? "").trim().toLowerCase();
-const backendMode = configuredBackendMode || (import.meta.env.MODE === "node" ? "node" : "");
-const canonicalAppOrigin = "https://sukat-ai-app.vercel.app";
+const backendMode = configuredBackendMode === "xampp" ? "xampp" : "node";
 
 export const isXamppMode = backendMode === "xampp";
 export const isNodeMode = backendMode === "node";
-export const isLocalApiMode = isXamppMode || isNodeMode;
+export const isLocalApiMode = true;
 
-function isUsableValue(value: string): boolean {
-  return value.length > 0 && !/^your[-_]/i.test(value);
-}
+// Minimal auth type shims. These replace the shapes the app used from
+// @supabase/supabase-js; only the fields the UI and adapters actually read are
+// modelled here.
+export type User = {
+  id: string;
+  email?: string | null;
+  email_confirmed_at?: string | null;
+  user_metadata?: Record<string, unknown>;
+  app_metadata?: Record<string, unknown>;
+  [key: string]: unknown;
+};
 
-function isValidUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
+export type Session = {
+  user: User;
+  access_token?: string;
+  [key: string]: unknown;
+};
+
+export type AuthResponse = {
+  data: { session: Session | null; user: User | null };
+  error: null;
+};
 
 export const supabaseConfig = {
-  mode: isXamppMode ? "xampp" : isNodeMode ? "node" : "supabase",
-  url,
-  anonKey,
-  missing: [
-    !isValidUrl(url) ? "NEXT_PUBLIC_SUPABASE_URL" : null,
-    !isUsableValue(anonKey) ? "NEXT_PUBLIC_SUPABASE_ANON_KEY" : null,
-  ].filter((value): value is string => Boolean(value)),
-  get isConfigured() {
-    return isLocalApiMode || this.missing.length === 0;
-  },
+  mode: backendMode,
+  isConfigured: true as const,
 };
 
 export function publicAppOrigin(): string {
@@ -44,13 +54,6 @@ export function publicAppOrigin(): string {
     } catch {
       // Fall back to the current origin when a deployment variable is malformed.
     }
-  }
-  if (
-    window.location.hostname === "sukat-ai-app.vercel.app" ||
-    window.location.hostname.endsWith(".vercel.app") ||
-    /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)
-  ) {
-    return canonicalAppOrigin;
   }
   return window.location.origin;
 }
@@ -65,23 +68,6 @@ export function invitationAppOrigin(): string {
     }
   }
   return canonicalAppOrigin;
-}
-
-export const supabase: SupabaseClient | null = !isLocalApiMode && supabaseConfig.isConfigured
-  ? createClient(supabaseConfig.url, supabaseConfig.anonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    })
-  : null;
-
-export function requireSupabase(): SupabaseClient {
-  if (!supabase) {
-    throw new Error(isXamppMode ? "SukatAI is running in XAMPP mode. Use the PHP API adapter instead of the Supabase client." : isNodeMode ? "SukatAI is running in Node.js mode. Use the Node API adapter instead of the Supabase client." : "Supabase is not configured. Add the public Supabase URL and anon key before using SukatAI.");
-  }
-  return supabase;
 }
 
 export function readableError(error: unknown): string {

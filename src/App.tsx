@@ -10,7 +10,6 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Session } from "@supabase/supabase-js";
 import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsType } from "three/examples/jsm/controls/OrbitControls.js";
 import {
@@ -33,6 +32,8 @@ import {
   signUpCustomer,
   updatePassword,
   updateProfile,
+  verifyEmailOtp,
+  type VerificationInfo,
 } from "./lib/auth";
 import {
   addReviewEvent,
@@ -64,7 +65,7 @@ import { requestScanProcessing, processingCopy } from "./lib/reconstructionProvi
 import { getScanResultTruth, measurementProvenance, qualityIssueText } from "./lib/scanResultTruth";
 import { createSignedStorageUrl, deleteScanAsset, uploadScanAsset } from "./lib/storage";
 import { subscribeToNodeScan } from "./lib/nodeApi";
-import { invitationAppOrigin, publicAppOrigin, readableError, supabaseConfig } from "./lib/supabase";
+import { invitationAppOrigin, publicAppOrigin, readableError, supabaseConfig, type Session } from "./lib/supabase";
 import {
   displayName,
   fittingStatusLabel,
@@ -337,7 +338,7 @@ function TrustPoint({ icon, title, copy }: { icon: IconName; title: string; copy
   return <div className="trust-point"><span className="trust-icon"><Icon name={icon} size={18} /></span><div><strong>{title}</strong><p>{copy}</p></div></div>;
 }
 
-function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification, showBack = mode !== "signin" }: { mode: AuthMode; notice: string; onBack: () => void; onModeChange: (mode: AuthMode) => void; onNotice: (notice: string) => void; onVerification: (email: string) => void; showBack?: boolean }) {
+function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification, showBack = mode !== "signin" }: { mode: AuthMode; notice: string; onBack: () => void; onModeChange: (mode: AuthMode) => void; onNotice: (notice: string) => void; onVerification: (email: string, info?: VerificationInfo) => void; showBack?: boolean }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -369,16 +370,21 @@ function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification
         onModeChange("signin");
       } else if (mode === "signin") {
         if (!email.trim() || !password) throw new Error("Enter your email and password.");
-        await signIn(email, password);
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) throw new Error("Enter a valid email address.");
+        const response = await signIn(email, password);
+        if (!response.data.session) {
+          onVerification(email.trim(), response.verification);
+        }
       } else {
         if (!firstName.trim() || !lastName.trim()) throw new Error("Enter your first and last name.");
         if (!email.trim() || !password) throw new Error("Enter an email and password.");
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) throw new Error("Enter a valid email address.");
         if (password.length < 8) throw new Error("Use a password with at least 8 characters.");
         if (password !== confirm) throw new Error("Passwords do not match.");
         if (!consent) throw new Error("Accept the privacy notice to create your customer account.");
         const response = await signUpCustomer({ firstName, lastName, email, password });
         if (!response.data.session) {
-          onVerification(email.trim());
+          onVerification(email.trim(), response.verification);
         }
       }
     } catch (reason: unknown) {
@@ -447,6 +453,7 @@ function ConfiguredApp() {
   const [publicView, setPublicView] = useState<AuthMode>("signin");
   const [notice, setNotice] = useState("");
   const [verificationEmail, setVerificationEmail] = useState("");
+  const [verificationInfo, setVerificationInfo] = useState<VerificationInfo | undefined>(undefined);
   const [invitationAuthOpen, setInvitationAuthOpen] = useState(false);
   const [invitationFlowComplete, setInvitationFlowComplete] = useState(false);
   const invitationParams = new URLSearchParams(window.location.search);
@@ -463,7 +470,6 @@ function ConfiguredApp() {
         : "";
   const invitationFlowRequested = !invitationFlowComplete && Boolean(inviteToken || supabaseInviteCallback || accountInvitationId || expiredInvitationCallback);
   const verificationRequested = new URLSearchParams(window.location.search).get("verify") === "1" || authHash.get("type") === "signup";
-  const verificationError = authHash.get("error_description") ?? authHash.get("error_code") ?? authHash.get("error") ?? "";
   const resetRequested = new URLSearchParams(window.location.search).get("reset") === "1" || window.location.hash.includes("type=recovery");
 
   useEffect(() => {
@@ -539,6 +545,7 @@ function ConfiguredApp() {
       if (verificationRequested || verificationEmail) {
         clearSpecialUrl();
         setVerificationEmail("");
+        setVerificationInfo(undefined);
         setPublicView("signin");
         event.preventDefault();
         return;
@@ -577,10 +584,11 @@ function ConfiguredApp() {
   if (loading) return <FullPageLoading />;
   if (invitationFlowRequested && session) return <InvitationAcceptPage token={inviteToken} session={session} profile={profile} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onAccepted={async () => { await refreshProfile(); finishInvitationFlow(); }} />;
   if (resetRequested && session) return <PasswordResetPage onComplete={() => { clearSpecialUrl(); void signOut(); }} />;
-  if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} verified={Boolean(session?.user.email_confirmed_at) && !verificationError} initialError={verificationError} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setPublicView("signin"); }} onContinue={() => { clearSpecialUrl(); setVerificationEmail(""); }} />;
-  if (invitationFlowRequested && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} showBack onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
+  if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} info={verificationInfo} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setVerificationInfo(undefined); setPublicView("signin"); }} onVerified={() => { clearSpecialUrl(); setVerificationEmail(""); setVerificationInfo(undefined); if (session) void refreshProfile(); }} />;
+  if (invitationFlowRequested && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} showBack onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email, info) => { setNotice(""); setVerificationEmail(email); setVerificationInfo(info); }} />;
   if (invitationFlowRequested && !session) return <InvitationWelcomePage session={null} expired={expiredInvitationCallback} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
-  if (!session) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("signin"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email) => { setNotice(""); setVerificationEmail(email); }} />;
+  if (!session) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("signin"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email, info) => { setNotice(""); setVerificationEmail(email); setVerificationInfo(info); }} />;
+  if (session && session.user.email_confirmed_at == null) return <EmailVerificationPage email={session.user.email ?? verificationEmail} info={verificationInfo} onBack={() => { void signOut(); }} onVerified={() => { void refreshProfile(); }} />;
   if (!profile || !isRole(profile.role)) return <ProfileUnavailable message={profileError || "Your authenticated account does not have a valid SukatAI profile."} onSignOut={() => void signOut()} />;
   return <Workspace profile={profile} onProfileChange={setProfile} onSignOut={() => void signOut()} />;
 }
@@ -614,21 +622,38 @@ function PasswordResetPage({ onComplete }: { onComplete: () => void }) {
   return <main className="setup-page"><div className="setup-card reset-card"><Logo /><p className="eyebrow">ACCOUNT RECOVERY</p><h1>Choose a new password.</h1><p>Use a password you have not used elsewhere. Your reset link is single-purpose and expires.</p><form className="auth-form" onSubmit={submit}><Field label="New password" value={password} onChange={setPassword} placeholder="At least 8 characters" type="password" autoComplete="new-password" /><Field label="Confirm password" value={confirm} onChange={setConfirm} placeholder="Repeat your password" type="password" autoComplete="new-password" />{notice && <div className="form-notice"><Icon name="check" size={16} /> {notice}</div>}{error && <InlineError message={error} />}<Button type="submit" disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Updating…" : "Update password"}</Button></form></div></main>;
 }
 
-function EmailVerificationPage({ email, verified, initialError, onBack, onContinue }: { email: string; verified: boolean; initialError: string; onBack: () => void; onContinue: () => void }) {
+function EmailVerificationPage({ email, info, onBack, onVerified }: { email: string; info?: VerificationInfo; onBack: () => void; onVerified: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [resendEmail, setResendEmail] = useState(email);
+  const [code, setCode] = useState("");
+  const [devCode, setDevCode] = useState<string | undefined>(info?.dev_code);
   const [cooldown, setCooldown] = useState(0);
-  const hasEmail = Boolean(resendEmail.trim());
-  const linkNeedsAttention = Boolean(initialError);
+  const hasEmail = Boolean(email.trim());
+  const codeReady = code.length === 6;
 
-  useEffect(() => setResendEmail(email), [email]);
+  useEffect(() => setDevCode(info?.dev_code), [info]);
   useEffect(() => {
     if (cooldown <= 0) return undefined;
     const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1000);
     return () => window.clearInterval(timer);
   }, [cooldown]);
+
+  const verify = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!codeReady) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await verifyEmailOtp(email, code);
+      onVerified();
+    } catch (reason: unknown) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const resend = async () => {
     if (!hasEmail) return;
@@ -636,8 +661,9 @@ function EmailVerificationPage({ email, verified, initialError, onBack, onContin
     setError("");
     setNotice("");
     try {
-      await resendSignupConfirmation(resendEmail);
-      setNotice("A fresh verification email is on its way. The new link will open this page again.");
+      const next = await resendSignupConfirmation(email);
+      if (next?.dev_code) setDevCode(next.dev_code);
+      setNotice("A fresh code is on its way. Enter the latest code we sent you.");
       setCooldown(30);
     } catch (reason: unknown) {
       setError(readableError(reason));
@@ -653,19 +679,25 @@ function EmailVerificationPage({ email, verified, initialError, onBack, onContin
         <p className="eyebrow">MEASURE WITH INTENTION</p>
         <h1>One small step toward <em>better fit.</em></h1>
         <p>Confirm your email so your private measurement account stays connected to you.</p>
-        <div className="story-list"><span><Icon name="mail" size={18} /> One secure verification link</span><span><Icon name="lock" size={18} /> Private account access</span><span><Icon name="arrow-right" size={18} /> Continue when you are ready</span></div>
+        <div className="story-list"><span><Icon name="mail" size={18} /> One secure verification code</span><span><Icon name="lock" size={18} /> Private account access</span><span><Icon name="arrow-right" size={18} /> Continue when you are ready</span></div>
       </div>
       <span className="story-footer">SukatAI · secure measurement workspace</span>
     </section>
     <section className="auth-form-panel"><div className="auth-form-wrap verification-card">
-      <div className="verification-topline"><Badge tone={verified ? "success" : linkNeedsAttention ? "warning" : "teal"} dot>{verified ? "Verified" : linkNeedsAttention ? "Action needed" : "Email confirmation"}</Badge><span>Step 1 of 1</span></div>
-      <div className={cn("verification-icon", verified && "verified", linkNeedsAttention && "needs-attention")} aria-hidden="true"><Icon name={verified ? "check" : linkNeedsAttention ? "info" : "mail"} size={26} /></div>
-      <div className="auth-heading"><p className="eyebrow">{verified ? "EMAIL VERIFIED" : linkNeedsAttention ? "VERIFICATION LINK" : "CHECK YOUR INBOX"}</p><h2>{verified ? "Your email is verified." : linkNeedsAttention ? "This link needs attention." : "Confirm your email."}</h2><p>{verified ? "Your account is ready. Continue to open your secure SukatAI workroom." : linkNeedsAttention ? <>That link may have expired or already been used. Request a fresh link{hasEmail ? " below" : " to continue"}.</> : <>We sent a confirmation link to <strong>{email || "your email address"}</strong>. Open it to finish creating your account.</>}</p></div>
-      {!verified && <div className="verification-steps" aria-label="Email verification steps"><div><span>1</span><p><strong>Open the email</strong><small>Look for the message from SukatAI.</small></p></div><div><span>2</span><p><strong>Confirm your address</strong><small>The link is single-purpose and secure.</small></p></div><div><span>3</span><p><strong>Return to your workroom</strong><small>Your account will be ready to use.</small></p></div></div>}
-      {!verified && !hasEmail && <div className="verification-email-field"><Field label="Email address" value={resendEmail} onChange={setResendEmail} placeholder="name@domain.com" type="email" autoComplete="email" /></div>}
-      {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}
-      {error && <InlineError message={error} />}
-      {verified ? <Button type="button" onClick={onContinue} icon="arrow-right">Continue to SukatAI</Button> : <div className="verification-actions"><Button type="button" onClick={() => void resend()} disabled={!hasEmail || busy || cooldown > 0} icon="mail">{busy ? "Sending…" : cooldown > 0 ? `Resend in ${cooldown}s` : "Resend verification email"}</Button><button type="button" className="text-button" onClick={onBack}>Use a different email</button></div>}
+      <div className="verification-topline"><Badge tone="teal" dot>Email confirmation</Badge><span>Step 1 of 1</span></div>
+      <div className="verification-icon" aria-hidden="true"><Icon name="mail" size={26} /></div>
+      <div className="auth-heading"><p className="eyebrow">CHECK YOUR INBOX</p><h2>Confirm your email.</h2><p>We sent a 6-digit code to <strong>{email || "your email address"}</strong>. Enter the code we emailed you to finish creating your account.</p></div>
+      {devCode && <div className="verification-devcode">Dev mode — no email configured. Your code is <strong>{devCode}</strong></div>}
+      <form className="auth-form" onSubmit={verify}>
+        <div className="field verification-code-field">
+          <label htmlFor="verification-code">Enter the 6-digit code</label>
+          <input id="verification-code" name="verification-code" inputMode="numeric" pattern="\d*" maxLength={6} autoComplete="one-time-code" className="verification-code-input" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />
+        </div>
+        {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}
+        {error && <InlineError message={error} />}
+        <Button type="submit" disabled={busy || !codeReady} icon={busy ? undefined : "arrow-right"}>{busy ? "Verifying…" : "Verify email"}</Button>
+      </form>
+      <div className="verification-actions"><Button variant="secondary" type="button" onClick={() => void resend()} disabled={!hasEmail || busy || cooldown > 0} icon="mail">{cooldown > 0 ? `Resend in ${cooldown}s` : "Resend verification email"}</Button><button type="button" className="text-button" onClick={onBack}>Use a different email</button></div>
       <p className="verification-note"><Icon name="shield" size={15} /> If you do not see the message, check your spam or promotions folder.</p>
     </div></section>
   </div>;
@@ -1009,7 +1041,7 @@ function CustomerDashboard({ profile, onNavigate }: { profile: Profile; onNaviga
   const latestScan = activeScan ?? verifiedScans[0];
   const loading = scansState.loading || ordersState.loading;
   const error = scansState.error || ordersState.error;
-  return <div className="page-stack"><SectionHeader eyebrow={`CUSTOMER WORKROOM · ${formatDate(new Date())}`} title="Your measurements" description="Start a scan or open your latest measurement record." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a scan</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { scansState.reload(); ordersState.reload(); }} /> : <><section className="welcome-banner"><div><Badge tone={verifiedScans.length > 0 ? "success" : "teal"} dot>{verifiedScans.length > 0 ? "MEASUREMENTS READY" : "ACCOUNT READY"}</Badge><h2>{verifiedScans.length > 0 ? "Your checked measurements are ready." : "Start a clearer scan."}</h2><p>{activeScan ? `Your current scan is ${scanStatusLabel(activeScan.status).toLowerCase()}.` : "Create a guided scan when you are ready. Results appear after the service checks your photos."}</p><div className="welcome-actions"><Button onClick={() => onNavigate("scan")} icon="scan">{activeScan ? "Continue scan" : "Start a scan"}</Button>{verifiedScans.length > 0 && <Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Start an order</Button>}</div></div><div className="welcome-orbit"><div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" /><span><Icon name="ruler" size={27} /></span></div></section><div className="stats-grid four-stats"><StatCard icon="scan" label="Scans" value={String(scans.length)} detail={activeScan ? scanStatusLabel(activeScan.status) : latestScan ? "Ready to review" : "No active scan"} onClick={() => onNavigate("scan")} /><StatCard icon="ruler" label="Checked sets" value={String(verifiedScans.length)} detail={verifiedScans.length ? "Ready to share" : "Not available yet"} onClick={() => onNavigate("measurements")} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail={orders.length ? "From your account" : "No orders yet"} onClick={() => onNavigate("orders")} /><StatCard icon="calendar" label="Fittings" value="—" detail="No fitting requests" onClick={() => onNavigate("fittings")} /></div><div className="dashboard-grid"><Panel className="latest-measurement"><div className="panel-heading"><div><p className="eyebrow">LATEST ACTIVITY</p><h2>{latestScan ? latestScan.status === "verified" ? "Latest measurement" : "Current scan" : "No measurements yet"}</h2></div>{latestScan && <StatusBadge status={latestScan.status} />}</div>{latestScan ? <div className="status-card"><span className="status-card-icon"><Icon name={latestScan.status === "verified" ? "ruler" : "scan"} size={22} /></span><div><strong>{latestScan.status === "verified" ? `Measurements checked ${formatDate(latestScan.updated_at)}` : `Scan created ${formatDate(latestScan.created_at)}`}</strong><p>{latestScan.status === "verified" ? "Your checked measurement set is ready to review or share with your dressmaker." : latestScan.status === "processing_queued" || latestScan.status === "processing" ? "Your uploaded views are waiting while the service checks them." : "Continue the guided flow to add or review your views."}</p></div><Button variant="ghost" onClick={() => onNavigate(latestScan.status === "verified" ? "measurements" : "scan")} icon="arrow-right">{latestScan.status === "verified" ? "Open measurements" : "Open scan"}</Button></div> : <DataState icon="ruler" title="No measurements yet" body="Start a scan to create your first private measurement record." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} />}</Panel><Panel className="scan-prompt"><p className="eyebrow">HOW IT WORKS</p><h2>A guided path from capture to review.</h2><div className="mini-steps"><span><i>01</i><b>Capture</b><small>Front + side</small></span><span><i>02</i><b>Check</b><small>Measurements</small></span><span><i>03</i><b>Review</b><small>Dressmaker check</small></span></div><button type="button" className="text-button" onClick={() => onNavigate("scan")}>Open photo guide <Icon name="arrow-right" size={15} /></button></Panel></div></>}</div>;
+  return <div className="page-stack"><SectionHeader eyebrow={`CUSTOMER WORKROOM · ${formatDate(new Date())}`} title="Your measurements" description="Start a scan or open your latest measurement record." action={<Button variant="secondary" icon="scan" onClick={() => onNavigate("scan")}>Start a scan</Button>} />{loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={() => { scansState.reload(); ordersState.reload(); }} /> : <><section className="welcome-banner"><div><Badge tone={verifiedScans.length > 0 ? "success" : "teal"} dot>{verifiedScans.length > 0 ? "MEASUREMENTS READY" : "ACCOUNT READY"}</Badge><h2>{verifiedScans.length > 0 ? "Your checked measurements are ready." : "Start a clearer scan."}</h2><p>{activeScan ? `Your current scan is ${scanStatusLabel(activeScan.status).toLowerCase()}.` : "Create a guided scan when you are ready. Results appear after the service checks your photos."}</p><div className="welcome-actions"><Button onClick={() => onNavigate("scan")} icon="scan">{activeScan ? "Continue scan" : "Start a scan"}</Button>{verifiedScans.length > 0 && <Button variant="secondary" onClick={() => onNavigate("orders")} icon="bag">Start an order</Button>}</div></div><div className="welcome-orbit"><div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" /><span><Icon name="ruler" size={27} /></span></div></section><div className="stats-grid four-stats"><StatCard icon="scan" label="Scans" value={String(scans.length)} detail={activeScan ? scanStatusLabel(activeScan.status) : latestScan ? "Ready to review" : "No active scan"} onClick={() => onNavigate("scan")} /><StatCard icon="ruler" label="Checked sets" value={String(verifiedScans.length)} detail={verifiedScans.length ? "Ready to share" : "Not available yet"} onClick={() => onNavigate("measurements")} /><StatCard icon="bag" label="Orders" value={String(orders.length)} detail={orders.length ? "From your account" : "No orders yet"} onClick={() => onNavigate("orders")} /><StatCard icon="calendar" label="Fittings" value="—" detail="View your fittings" onClick={() => onNavigate("fittings")} /></div><div className="dashboard-grid"><Panel className="latest-measurement"><div className="panel-heading"><div><p className="eyebrow">LATEST ACTIVITY</p><h2>{latestScan ? latestScan.status === "verified" ? "Latest measurement" : "Current scan" : "No measurements yet"}</h2></div>{latestScan && <StatusBadge status={latestScan.status} />}</div>{latestScan ? <div className="status-card"><span className="status-card-icon"><Icon name={latestScan.status === "verified" ? "ruler" : "scan"} size={22} /></span><div><strong>{latestScan.status === "verified" ? `Measurements checked ${formatDate(latestScan.updated_at)}` : `Scan created ${formatDate(latestScan.created_at)}`}</strong><p>{latestScan.status === "verified" ? "Your checked measurement set is ready to review or share with your dressmaker." : latestScan.status === "processing_queued" || latestScan.status === "processing" ? "Your uploaded views are waiting while the service checks them." : "Continue the guided flow to add or review your views."}</p></div><Button variant="ghost" onClick={() => onNavigate(latestScan.status === "verified" ? "measurements" : "scan")} icon="arrow-right">{latestScan.status === "verified" ? "Open measurements" : "Open scan"}</Button></div> : <DataState icon="ruler" title="No measurements yet" body="Start a scan to create your first private measurement record." action={<Button onClick={() => onNavigate("scan")} icon="scan">Start a scan</Button>} />}</Panel><Panel className="scan-prompt"><p className="eyebrow">HOW IT WORKS</p><h2>A guided path from capture to review.</h2><div className="mini-steps"><span><i>01</i><b>Capture</b><small>Front + side</small></span><span><i>02</i><b>Check</b><small>Measurements</small></span><span><i>03</i><b>Review</b><small>Dressmaker check</small></span></div><button type="button" className="text-button" onClick={() => onNavigate("scan")}>Open photo guide <Icon name="arrow-right" size={15} /></button></Panel></div></>}</div>;
 }
 
 function StatCard({ icon, label, value, detail, onClick }: { icon: IconName; label: string; value: string; detail: string; onClick?: () => void }) {
@@ -1356,7 +1388,7 @@ function ScanProcessing({ scanId, initialMessage, onBack, onResults }: { scanId:
     if (!(["queued", "validating", "processing"] as ProcessingStage[]).includes(stage)) return undefined;
     const interval = window.setInterval(() => {
       void refresh().catch((reason: unknown) => { if (mountedRef.current) setError(readableError(reason)); });
-    }, 900);
+    }, 2500);
     return () => window.clearInterval(interval);
   }, [bundle?.scan.processing_status, bundle?.scan.status, scanId]);
 
@@ -1566,6 +1598,7 @@ function personalizedGuideFractions(model: ScanBundle["bodyModel"]): Record<stri
 }
 
 type ProviderGuideContour = {
+  kind: "contour" | "line";
   levelFraction: number;
   levelHeightCm: number;
   points: Array<[number, number, number]>;
@@ -1578,9 +1611,10 @@ function personalizedGuideGeometry(model: ScanBundle["bodyModel"]): Record<strin
   const rawGeometry = reconstruction.guide_geometry;
   if (!isRecord(rawGeometry) || rawGeometry.coordinate_system !== "glb-y-up-right-handed" || rawGeometry.units !== "m" || rawGeometry.up_axis !== "y") return {};
   const calibratedHeight = Number(rawGeometry.calibrated_height_cm);
-  if (!Number.isFinite(calibratedHeight) || calibratedHeight <= 0 || calibratedHeight > 500 || !isRecord(rawGeometry.contours)) return {};
+  if (!Number.isFinite(calibratedHeight) || calibratedHeight <= 0 || calibratedHeight > 500) return {};
   const geometry: Record<string, ProviderGuideContour> = {};
-  for (const [key, rawContour] of Object.entries(rawGeometry.contours)) {
+  const rawContours = isRecord(rawGeometry.contours) ? rawGeometry.contours : {};
+  for (const [key, rawContour] of Object.entries(rawContours)) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(key) || !isRecord(rawContour)) continue;
     const levelFraction = Number(rawContour.level_fraction);
     const levelHeightCm = Number(rawContour.level_height_cm);
@@ -1595,7 +1629,34 @@ function personalizedGuideGeometry(model: ScanBundle["bodyModel"]): Record<strin
       }
       points.push([rawPoint[0], rawPoint[1], rawPoint[2]]);
     }
-    if (points.length >= 8) geometry[key] = { levelFraction, levelHeightCm, points, source };
+    if (points.length >= 8) geometry[key] = { kind: "contour", levelFraction, levelHeightCm, points, source };
+  }
+  // Dimension lines (height, inseam, shoulder breadth) are provider-authored
+  // but are not closed rings, so they arrive under `lines` and render as lines.
+  const rawLines = isRecord(rawGeometry.lines) ? rawGeometry.lines : {};
+  for (const [key, rawLine] of Object.entries(rawLines)) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(key) || !isRecord(rawLine)) continue;
+    const source = typeof rawLine.source === "string" ? rawLine.source.trim() : "";
+    const rawPoints = rawLine.points;
+    if (!source || source.length > 120 || !Array.isArray(rawPoints) || rawPoints.length < 2 || rawPoints.length > 8) continue;
+    const points: Array<[number, number, number]> = [];
+    for (const rawPoint of rawPoints) {
+      if (!Array.isArray(rawPoint) || rawPoint.length !== 3 || rawPoint.some((coordinate) => typeof coordinate !== "number" || !Number.isFinite(coordinate) || Math.abs(coordinate) > 100)) {
+        points.length = 0;
+        break;
+      }
+      points.push([rawPoint[0], rawPoint[1], rawPoint[2]]);
+    }
+    if (points.length < 2) continue;
+    const levelFraction = Number(rawLine.level_fraction);
+    const levelHeightCm = Number(rawLine.level_height_cm);
+    geometry[key] = {
+      kind: "line",
+      levelFraction: Number.isFinite(levelFraction) ? levelFraction : 0,
+      levelHeightCm: Number.isFinite(levelHeightCm) ? levelHeightCm : 0,
+      points,
+      source,
+    };
   }
   return geometry;
 }
@@ -1829,18 +1890,26 @@ function addMeasuredEllipseGuide(three: ThreeModule, group: THREE.Group, center:
   group.add(line);
 }
 
-function addMeasuredContourGuide(three: ThreeModule, group: THREE.Group, points: THREE.Vector3[], color: number, key?: string, aliases: string[] = []) {
-  if (points.length < 8) return;
+function addMeasuredContourGuide(three: ThreeModule, group: THREE.Group, points: THREE.Vector3[], color: number, key?: string, aliases: string[] = [], options: { line?: boolean } = {}) {
+  const isLine = options.line === true || points.length <= 2;
+  if (isLine ? points.length < 2 : points.length < 8) return;
   const center = points.reduce((sum, point) => sum.add(point), new three.Vector3()).multiplyScalar(1 / points.length);
-  const lifted = points.map((point) => {
+  const lifted = isLine ? points : points.map((point) => {
     const radial = new three.Vector3(point.x - center.x, 0, point.z - center.z);
     if (radial.lengthSq() > 0) radial.normalize().multiplyScalar(0.0025);
     return point.clone().add(radial);
   });
-  const line = new three.LineLoop(
-    new three.BufferGeometry().setFromPoints(lifted),
-    new three.LineBasicMaterial({ color, transparent: true, opacity: 0.98, depthTest: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
-  );
+  // A provider dimension line is drawn in front of the body, while a
+  // circumference contour is drawn on the surface.
+  const line = isLine
+    ? new three.Line(
+      new three.BufferGeometry().setFromPoints(lifted),
+      new three.LineBasicMaterial({ color, transparent: true, opacity: 0.98, depthTest: false, depthWrite: false }),
+    )
+    : new three.LineLoop(
+      new three.BufferGeometry().setFromPoints(lifted),
+      new three.LineBasicMaterial({ color, transparent: true, opacity: 0.98, depthTest: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+    );
   line.renderOrder = 4;
   line.frustumCulled = false;
   line.userData.guideColor = color;
@@ -1853,13 +1922,15 @@ function addMeasuredContourGuide(three: ThreeModule, group: THREE.Group, points:
 
 function addMeasuredLimbGuide(three: ThreeModule, group: THREE.Group, center: THREE.Vector3, start: THREE.Vector3, end: THREE.Vector3, radii: LimbRadii, color: number, key?: string, aliases: string[] = []) {
   const axis = new three.Vector3().subVectors(end, start).normalize();
-  const reference = Math.abs(axis.y) < 0.9 ? new three.Vector3(0, 1, 0) : new three.Vector3(1, 0, 0);
-  const basisA = new three.Vector3().crossVectors(axis, reference).normalize();
-  const basisB = new three.Vector3().crossVectors(axis, basisA).normalize();
+  // Use the exact basis the limb mesh uses, otherwise the ring is rotated a
+  // quarter turn and its width/depth radii are swapped against the surface.
+  const reference = Math.abs(axis.y) > 0.9 ? new three.Vector3(0, 0, 1) : new three.Vector3(0, 1, 0);
+  const widthAxis = new three.Vector3().crossVectors(reference, axis).normalize();
+  const depthAxis = new three.Vector3().crossVectors(axis, widthAxis).normalize();
   const points: THREE.Vector3[] = [];
   for (let index = 0; index < 40; index += 1) {
     const angle = (index / 40) * Math.PI * 2;
-    points.push(center.clone().addScaledVector(basisA, radii[0] * Math.cos(angle)).addScaledVector(basisB, radii[1] * Math.sin(angle)));
+    points.push(center.clone().addScaledVector(widthAxis, radii[0] * Math.cos(angle)).addScaledVector(depthAxis, radii[1] * Math.sin(angle)));
   }
   const line = new three.LineLoop(
     new three.BufferGeometry().setFromPoints(points),
@@ -1887,42 +1958,57 @@ const personalizedRingSpecs: PersonalizedRingSpec[] = [
   { key: "chest", aliases: ["bust", "chest_circumference"], color: 0x60e8d7 },
   { key: "waist", aliases: ["waist_circumference"], color: 0x71dbe6 },
   { key: "hip", aliases: ["hips", "hip_circumference"], color: 0xf1d33b },
+  // The provider emits mesh-plane contours for these limb levels in the same
+  // coordinate system as the exported GLB, so they can be drawn exactly
+  // instead of falling back to the procedural preview landmarks.
+  { key: "upper_arm", aliases: ["upper_arm_left", "upper_arm_right", "bicep", "upper_arm_circumference"], color: 0x74d96e },
+  { key: "forearm", aliases: ["forearm_left", "forearm_right", "forearm_circumference"], color: 0xe969ad },
+  { key: "wrist", aliases: ["wrist_left", "wrist_right", "wrist_circumference"], color: 0xf2b4d9 },
+  { key: "thigh", aliases: ["thigh_left", "thigh_right", "thigh_circumference"], color: 0xc3d2e3 },
+  { key: "calf", aliases: ["calf_left", "calf_right", "calf_circumference"], color: 0x5bd6e2 },
+  { key: "ankle", aliases: ["ankle_left", "ankle_right", "ankle_circumference"], color: 0xf5ae2e },
+  // Provider dimension lines (not closed rings) for length and breadth levels.
+  { key: "height", aliases: ["stature"], color: 0xf04fc5 },
+  { key: "inseam", aliases: ["inside_leg"], color: 0xea4fc0 },
+  { key: "shoulder", aliases: ["shoulders", "shoulder_breadth", "shoulder_width"], color: 0x64e4d3 },
 ];
 
-const personalizedTorsoGuideKeys = new Set(personalizedRingSpecs.map((spec) => spec.key));
-
-const personalizedCircumferenceGuideKeys = new Set([
-  "head", "neck", "chest", "waist", "hip", "upper_arm_left", "upper_arm_right", "forearm_left", "forearm_right",
-  "wrist_left", "wrist_right", "thigh_left", "thigh_right", "calf_left", "calf_right", "ankle_left", "ankle_right",
-]);
+const personalizedTorsoGuideKeys = new Set(["chest", "waist", "hip"]);
 
 function returnedMeasurementMatches(measurements: Measurement[], keys: string[]): boolean {
   return measurements.some((measurement) => measurementGuideMatches(measurement.key, keys));
 }
 
-function hideUnreturnedPersonalizedGuides(guides: THREE.Group, measurements: Measurement[]): void {
+function providerContourForGuideKey(guideGeometry: Record<string, ProviderGuideContour>, guideKey: string | null): ProviderGuideContour | undefined {
+  if (!guideKey) return undefined;
+  if (guideGeometry[guideKey]) return guideGeometry[guideKey];
+  // Provider contours are keyed by body level (for example "thigh"), while the
+  // selected measurement guide can be side-specific ("thigh_left").
+  const spec = personalizedRingSpecs.find((candidate) => candidate.key === guideKey || candidate.aliases.includes(guideKey));
+  return spec ? guideGeometry[spec.key] : undefined;
+}
+
+function hideProceduralGuides(guides: THREE.Group): void {
+  // A personalized mesh has its own shape and landmarks, so every guide built
+  // for the procedural preview body would sit in the wrong place. Hide them all
+  // and add back only the provider-authored or mesh-extracted contours.
   guides.traverse((object) => {
-    const key = object.userData.measurementKey;
-    if (typeof key !== "string") return;
-    // The procedural torso ellipses are only a fallback for the preview body.
-    // A personalized GLB gets one contour extracted from its actual surface;
-    // keeping both guides creates visibly offset/doubled rings.
-    if (personalizedTorsoGuideKeys.has(key)) {
+    if (typeof object.userData.measurementKey === "string") {
       object.visible = false;
-      return;
+      // Remember this was a preview-body guide so the focus effect can restore
+      // the single fallback guide when the provider returned no contour for the
+      // selected measurement (for example height, inseam, or shoulder).
+      object.userData.personalizedFallback = true;
     }
-    if (!personalizedCircumferenceGuideKeys.has(key)) return;
-    const aliases = (object.userData.measurementKeys as string[] | undefined) ?? [key];
-    object.visible = returnedMeasurementMatches(measurements, aliases);
   });
 }
 
 function addPersonalizedRingGuides(three: ThreeModule, guides: THREE.Group, model: THREE.Object3D, measurements: Measurement[], guideFractions: Record<string, number>, guideGeometry: Record<string, ProviderGuideContour>): void {
   model.updateMatrixWorld(true);
+  hideProceduralGuides(guides);
   const bounds = new three.Box3().setFromObject(model);
   const height = bounds.max.y - bounds.min.y;
   if (!Number.isFinite(height) || height <= 0) return;
-  hideUnreturnedPersonalizedGuides(guides, measurements);
   const modelCenter = bounds.getCenter(new three.Vector3());
   for (const spec of personalizedRingSpecs) {
     const measurementKeys = [spec.key, ...spec.aliases];
@@ -1930,21 +2016,18 @@ function addPersonalizedRingGuides(three: ThreeModule, guides: THREE.Group, mode
     const providerContour = guideGeometry[spec.key];
     if (providerContour) {
       const points = providerContour.points.map(([x, y, z]) => new three.Vector3(x, y, z).applyMatrix4(model.matrixWorld));
-      addMeasuredContourGuide(three, guides, points, spec.color, spec.key, spec.aliases);
+      addMeasuredContourGuide(three, guides, points, spec.color, spec.key, spec.aliases, { line: providerContour.kind === "line" });
       continue;
     }
+    // Only a torso ring can be recovered reliably from a horizontal plane
+    // through the model; a limb plane would pick an arbitrary side.
+    if (!personalizedTorsoGuideKeys.has(spec.key)) continue;
     const rawFraction = Number(guideFractions[spec.key]);
-    // A personalized guide must use the provider's measured level. The old
-    // hard-coded fractions placed rings at generic mannequin landmarks, which
-    // made them visibly disagree with the returned mesh and measurements.
     if (!Number.isFinite(rawFraction) || rawFraction <= 0.05 || rawFraction >= 0.99) continue;
-    const fraction = rawFraction;
-    const y = bounds.min.y + height * fraction;
+    const y = bounds.min.y + height * rawFraction;
     const planeOrigin = new three.Vector3(modelCenter.x, y, modelCenter.z);
     const contour = extractModelPlaneContour(three, model, planeOrigin, new three.Vector3(0, 1, 0), planeOrigin);
-    if (contour) {
-      addMeasuredContourGuide(three, guides, contour, spec.color, spec.key, spec.aliases);
-    }
+    if (contour) addMeasuredContourGuide(three, guides, contour, spec.color, spec.key, spec.aliases);
   }
 }
 
@@ -1992,40 +2075,53 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
   const neckRadii = ellipseRadiiForCircumference(neckCm, 0.82, modelUnitsPerCm);
   const headRadii = ellipseRadiiForCircumference(headCm, 0.88, modelUnitsPerCm);
   const shoulderHalf = shoulderCm * modelUnitsPerCm / 2;
-  const shoulderY = height * 0.78;
-  const hipY = height * 0.52;
-  const neckBaseY = height * 0.84;
-  const pelvisY = neckBaseY - neckToPelvisCm * modelUnitsPerCm;
-  const crotchY = inseamCm * modelUnitsPerCm;
-  const kneeY = Math.max(crotchY * 0.58, height * 0.24);
-  const ankleY = height * 0.055;
-  const leftLegX = clampNumber(hipRadii[0] * 0.62, 0.16, 0.38);
-  const chestY = height * 0.69;
-  const waistY = height * 0.62;
-  const hipGuideY = height * 0.52;
+  const chestWidth = chestRadii[0];
+  const chestDepth = chestRadii[1];
+  const waistWidth = waistRadii[0];
+  const waistDepth = waistRadii[1];
+  const hipWidth = hipRadii[0];
+  const hipDepth = hipRadii[1];
+  // Anchor the lower-body landmarks to the measured inseam. Fixed height
+  // fractions let a long-legged result drop the torso below the crotch and a
+  // short-legged one float the hips too high.
+  const ankleY = height * 0.042;
+  const crotchY = clampNumber(inseamCm * modelUnitsPerCm, height * 0.34, height * 0.52);
+  const kneeY = ankleY + (crotchY - ankleY) * 0.58;
+  const hipY = Math.min(crotchY + height * 0.07, height * 0.56);
+  const torsoBaseY = Math.min(crotchY, hipY - height * 0.045);
+  const shoulderY = height * 0.8;
+  const neckBaseY = height * 0.83;
+  const neckRingY = height * 0.845;
+  const chestY = height * 0.7;
+  const waistY = height * 0.625;
+  const hipGuideY = hipY;
+  const pelvisY = clampNumber(neckBaseY - neckToPelvisCm * modelUnitsPerCm, hipY, neckBaseY);
 
   root.add(body, guides);
+  // The torso mesh and the circumference guides must share the same radii.
+  // Clamping only the mesh made a broad chest or hip guide ring float outside
+  // the body, so the measured width now drives both.
   createMeasuredSurface(three, body, [
-    { y: height * 0.43, width: hipRadii[0] * 0.66, depth: hipRadii[1] * 0.66 },
-    { y: height * 0.455, width: hipRadii[0] * 0.82, depth: hipRadii[1] * 0.82 },
-    { y: height * 0.485, width: hipRadii[0] * 0.98, depth: hipRadii[1] * 0.98 },
-    { y: hipY, width: hipRadii[0], depth: hipRadii[1] },
-    { y: height * 0.545, width: hipRadii[0] * 0.96, depth: hipRadii[1] * 0.98 },
-    { y: height * 0.575, width: waistRadii[0] * 1.05, depth: waistRadii[1] * 1.04 },
-    { y: waistY, width: waistRadii[0], depth: waistRadii[1] },
-    { y: height * 0.645, width: waistRadii[0] * 1.04, depth: waistRadii[1] * 1.02 },
-    { y: height * 0.675, width: chestRadii[0] * 0.98, depth: chestRadii[1] * 0.98 },
-    { y: chestY, width: chestRadii[0], depth: chestRadii[1] },
-    { y: height * 0.72, width: chestRadii[0] * 1.02, depth: chestRadii[1] * 0.99 },
-    { y: height * 0.75, width: chestRadii[0] * 0.97, depth: chestRadii[1] * 0.93 },
-    { y: shoulderY, width: Math.max(chestRadii[0] * 0.94, shoulderHalf * 0.84), depth: chestRadii[1] * 0.88 },
-    { y: height * 0.795, width: neckRadii[0] * 1.2, depth: neckRadii[1] * 1.16 },
+    { y: torsoBaseY, width: hipWidth * 0.74, depth: hipDepth * 0.68 },
+    { y: torsoBaseY + height * 0.015, width: hipWidth * 0.86, depth: hipDepth * 0.82 },
+    { y: torsoBaseY + height * 0.03, width: hipWidth * 0.97, depth: hipDepth * 0.95 },
+    { y: hipY, width: hipWidth, depth: hipDepth },
+    { y: hipY + (waistY - hipY) * 0.45, width: hipWidth * 0.95, depth: hipDepth * 0.96 },
+    { y: hipY + (waistY - hipY) * 0.85, width: waistWidth * 1.02, depth: waistDepth * 1.02 },
+    { y: waistY, width: waistWidth, depth: waistDepth },
+    { y: waistY + (chestY - waistY) * 0.28, width: waistWidth * 1.03, depth: waistDepth * 1.02 },
+    { y: waistY + (chestY - waistY) * 0.62, width: chestWidth * 0.98, depth: chestDepth * 0.98 },
+    { y: chestY, width: chestWidth, depth: chestDepth },
+    { y: chestY + (shoulderY - chestY) * 0.4, width: chestWidth * 1.01, depth: chestDepth * 0.99 },
+    { y: chestY + (shoulderY - chestY) * 0.8, width: chestWidth * 0.96, depth: chestDepth * 0.94 },
+    { y: shoulderY, width: Math.max(chestWidth * 0.9, shoulderHalf * 0.82), depth: chestDepth * 0.86 },
+    { y: neckBaseY, width: neckRadii[0] * 1.35, depth: neckRadii[1] * 1.25 },
   ], bodyMaterial);
   createMeasuredSurface(three, body, [
-    { y: height * 0.79, width: neckRadii[0] * 1.16, depth: neckRadii[1] * 1.14 },
-    { y: height * 0.81, width: neckRadii[0] * 1.06, depth: neckRadii[1] * 1.06 },
-    { y: height * 0.84, width: neckRadii[0], depth: neckRadii[1] },
-    { y: height * 0.87, width: neckRadii[0], depth: neckRadii[1] },
+    { y: neckBaseY, width: neckRadii[0] * 1.25, depth: neckRadii[1] * 1.18 },
+    { y: neckBaseY + (neckRingY - neckBaseY) * 0.5, width: neckRadii[0] * 1.08, depth: neckRadii[1] * 1.06 },
+    { y: neckRingY, width: neckRadii[0], depth: neckRadii[1] },
+    { y: neckRingY + height * 0.025, width: neckRadii[0] * 0.98, depth: neckRadii[1] * 0.98 },
   ], bodyMaterial);
 
   const headY = height - height * 0.087;
@@ -2071,18 +2167,21 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
   addBodySphere(three, body, [leftWrist.x - handWidthLeft * 0.75, leftWrist.y - handLength * 0.28, leftWrist.z + 0.1], [height * 0.018, height * 0.045, height * 0.022], jointMaterial);
   addBodySphere(three, body, [rightWrist.x + handWidthRight * 0.75, rightWrist.y - handLength * 0.28, rightWrist.z + 0.1], [height * 0.018, height * 0.045, height * 0.022], jointMaterial);
 
-  const leftHip = new three.Vector3(-leftLegX, hipY, 0);
-  const rightHip = new three.Vector3(leftLegX, hipY, 0);
-  const leftKnee = new three.Vector3(-leftLegX * 1.04, kneeY, 0.035);
-  const rightKnee = new three.Vector3(leftLegX * 1.04, kneeY, 0.035);
-  const leftAnkle = new three.Vector3(-leftLegX * 1.06, ankleY, 0.065);
-  const rightAnkle = new three.Vector3(leftLegX * 1.06, ankleY, 0.065);
   const thighLeftRadii = ellipseRadiiForCircumference(thighLeftCm, 0.78, modelUnitsPerCm);
   const thighRightRadii = ellipseRadiiForCircumference(thighRightCm, 0.78, modelUnitsPerCm);
   const calfLeftRadii = ellipseRadiiForCircumference(calfLeftCm, 0.74, modelUnitsPerCm);
   const calfRightRadii = ellipseRadiiForCircumference(calfRightCm, 0.74, modelUnitsPerCm);
   const ankleLeftRadii = ellipseRadiiForCircumference(ankleLeftCm, 0.7, modelUnitsPerCm);
   const ankleRightRadii = ellipseRadiiForCircumference(ankleRightCm, 0.7, modelUnitsPerCm);
+  // Keep the thigh outer edges flush with the measured hip width instead of
+  // letting the legs splay wider than the pelvis.
+  const leftLegX = clampNumber(hipWidth - thighLeftRadii[0] * 0.92, 0.14, 0.34);
+  const leftHip = new three.Vector3(-leftLegX, hipY, 0);
+  const rightHip = new three.Vector3(leftLegX, hipY, 0);
+  const leftKnee = new three.Vector3(-leftLegX * 1.04, kneeY, 0.035);
+  const rightKnee = new three.Vector3(leftLegX * 1.04, kneeY, 0.035);
+  const leftAnkle = new three.Vector3(-leftLegX * 1.06, ankleY, 0.065);
+  const rightAnkle = new three.Vector3(leftLegX * 1.06, ankleY, 0.065);
   addMeasuredLimb(three, body, leftHip, leftKnee, [thighLeftRadii[0] * 1.12, thighLeftRadii[1] * 1.1], [thighLeftRadii[0] * 0.88, thighLeftRadii[1] * 0.9], bodyMaterial, thighLeftRadii);
   addMeasuredLimb(three, body, rightHip, rightKnee, [thighRightRadii[0] * 1.12, thighRightRadii[1] * 1.1], [thighRightRadii[0] * 0.88, thighRightRadii[1] * 0.9], bodyMaterial, thighRightRadii);
   addMeasuredLimb(three, body, leftKnee, leftAnkle, [calfLeftRadii[0] * 1.08, calfLeftRadii[1] * 1.08], ankleLeftRadii, bodyMaterial, calfLeftRadii);
@@ -2100,8 +2199,8 @@ function createMeasuredBodyModelScene(three: ThreeModule, measurements: Measurem
     }
   }
 
-  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, neckBaseY, 0), neckRadii, 0x9e9cff, "neck");
-  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, headY + height * 0.018, 0), headRadii, 0x72e56f, "head");
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, neckRingY, 0), neckRadii, 0x9e9cff, "neck");
+  addMeasuredEllipseGuide(three, guides, new three.Vector3(0, headY, 0), headRadii, 0x72e56f, "head");
   addMeasuredEllipseGuide(three, guides, new three.Vector3(0, chestY, 0), chestRadii, 0x60e8d7, "chest");
   addMeasuredEllipseGuide(three, guides, new three.Vector3(0, waistY, 0), waistRadii, 0x71dbe6, "waist");
   addMeasuredEllipseGuide(three, guides, new three.Vector3(0, hipGuideY, 0), hipRadii, 0xf1d33b, "hip");
@@ -2201,6 +2300,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
     let scene: THREE.Scene | null = null;
     let controls: OrbitControlsType | null = null;
     let cleanupRuntime: (() => void) | null = null;
+    let onZoomWheel: ((event: WheelEvent) => void) | null = null;
     const canvas = canvasRef.current;
     const host = canvas?.parentElement;
     if (!canvas || !host) return () => { active = false; };
@@ -2247,7 +2347,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         controls = new runtime.OrbitControls(camera, canvas);
         controls.enableDamping = true;
         controls.enablePan = false;
-        controls.enableZoom = true;
+        controls.enableZoom = false;
         controls.zoomSpeed = 0.75;
         controls.rotateSpeed = 0.62;
         controls.screenSpacePanning = false;
@@ -2259,6 +2359,23 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         controls.autoRotate = autoRotate && !reducedMotionRef.current;
         controls.autoRotateSpeed = 0.8;
         controlsRef.current = controls;
+        // Page scrolling must win over the canvas so long result pages stay
+        // reachable on touch and on narrow single-column layouts. Vertical
+        // touch swipes pan the page; zoom moves to Ctrl/Cmd + wheel plus the
+        // on-screen and keyboard controls.
+        canvas.style.touchAction = "pan-y";
+        onZoomWheel = (event: WheelEvent) => {
+          if (!(event.ctrlKey || event.metaKey)) return;
+          const activeControls = controlsRef.current;
+          if (!activeControls) return;
+          event.preventDefault();
+          hasUserInteractedRef.current = true;
+          if (event.deltaY < 0) activeControls.dollyIn(1.1);
+          else activeControls.dollyOut(1.1);
+          activeControls.update();
+          renderRequestRef.current?.();
+        };
+        canvas.addEventListener("wheel", onZoomWheel, { passive: false });
 
         scene.add(new three.HemisphereLight(0xbad6ff, 0x102438, 1.75));
         const keyLight = new three.DirectionalLight(0xffffff, 3.2);
@@ -2295,14 +2412,24 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         scene.add(grid);
         let personalizedModel: THREE.Object3D | null = null;
         if (modelUrl) {
-          const loader = new GLTFLoader();
-          (loader as unknown as { setWithCredentials?: (value: boolean) => void }).setWithCredentials?.(true);
-          const gltf = await loader.loadAsync(modelUrl);
-          if (!active) {
-            disposeThreeScene(gltf.scene);
-            return;
+          try {
+            const response = await fetch(modelUrl, { credentials: "include" });
+            if (!response.ok) throw new Error(`HTTP ${response.status} loading 3D model asset`);
+            const buffer = await response.arrayBuffer();
+            const loader = new GLTFLoader();
+            const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) => {
+              loader.parse(buffer, "", resolve, reject);
+            });
+            if (!active) {
+              disposeThreeScene(gltf.scene);
+              return;
+            }
+            personalizedModel = gltf.scene;
+          } catch (loadError) {
+            if (!active) return;
+            console.error("Personalized model failed to load; showing measured preview instead.", loadError);
+            personalizedModel = null;
           }
-          personalizedModel = gltf.scene;
         }
         const bodyScene = createMeasuredBodyModelScene(three, measurements, heightValue, heightUnit);
         guidesRef.current = bodyScene.guides;
@@ -2319,6 +2446,14 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
           const legacyZUp = initialSize.z > initialSize.y * 1.25 && initialSize.z > initialSize.x * 1.05;
           if (legacyZUp) {
             personalizedModel.rotation.x = -Math.PI / 2;
+            personalizedModel.updateMatrixWorld(true);
+          }
+          // A standing body is wider (X) than deep (Z). A mesh that is deeper
+          // than it is wide was exported rotated a quarter turn around Y and
+          // renders sideways, so turn it back toward the camera.
+          const orientedSize = new three.Box3().setFromObject(personalizedModel).getSize(new three.Vector3());
+          if (!legacyZUp && orientedSize.z > orientedSize.x * 1.25) {
+            personalizedModel.rotation.y = -Math.PI / 2;
             personalizedModel.updateMatrixWorld(true);
           }
           const sourceBounds = new three.Box3().setFromObject(personalizedModel);
@@ -2476,6 +2611,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
       active = false;
       if (frame) window.cancelAnimationFrame(frame);
       cleanupRuntime?.();
+      if (onZoomWheel) canvas.removeEventListener("wheel", onZoomWheel);
       renderRequestRef.current = null;
       controls?.dispose();
       controlsRef.current = null;
@@ -2506,6 +2642,10 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
     const guides = guidesRef.current;
     if (!guides) return;
     const focusedKey = focusedMeasurementKey ? measurementGuideKey(focusedMeasurementKey) : null;
+    // A provider contour replaces the preview-body guide for a level. When the
+    // provider returned no contour for the selected measurement, restore that
+    // measurement's preview guide so the click always has a visible result.
+    const focusedHasProviderContour = Boolean(modelUrl) && focusedKey !== null && Boolean(providerContourForGuideKey(guideGeometry, focusedKey));
     guides.traverse((object) => {
       const guideKey = object.userData.measurementKey as string | undefined;
       if (!guideKey) return;
@@ -2513,6 +2653,9 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
       const material = object as unknown as { material?: THREE.Material | THREE.Material[] };
       const materials = Array.isArray(material.material) ? material.material : material.material ? [material.material] : [];
       const isFocused = focusedKey !== null && measurementGuideMatches(focusedMeasurementKey ?? "", guideKeys);
+      if (object.userData.personalizedFallback === true) {
+        object.visible = isFocused && !focusedHasProviderContour;
+      }
       const guideColor = object.userData.guideColor as number | undefined;
       object.scale.setScalar(isFocused ? 1.06 : 1);
       object.renderOrder = isFocused ? 7 : 4;
@@ -2525,7 +2668,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
       });
     });
     renderRequestRef.current?.();
-  }, [focusedMeasurementKey, measurementSignature, showGuides, viewerState]);
+  }, [focusedMeasurementKey, measurementSignature, showGuides, viewerState, modelUrl, guideGeometrySignature]);
 
   const handleCanvasKeyDown = (event: KeyboardEvent<HTMLCanvasElement>) => {
     const controls = controlsRef.current;
@@ -2553,10 +2696,10 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
   const focusedMeasurement = focusedMeasurementKey ? measurements.find((measurement) => measurement.key === focusedMeasurementKey) : undefined;
   const focusedMeasurementLabel = focusedMeasurement ? `${displayMeasurementKey(focusedMeasurement.key)} · ${displayMeasurementValue(focusedMeasurement)}` : "No measurement guide selected";
   const focusedGuideKey = focusedMeasurementKey ? measurementGuideKey(focusedMeasurementKey) : null;
-  const focusedProviderContour = focusedGuideKey ? guideGeometry[focusedGuideKey] : undefined;
+  const focusedProviderContour = providerContourForGuideKey(guideGeometry, focusedGuideKey);
   const guideQualityMessage = modelUrl && focusedMeasurement
     ? focusedProviderContour
-      ? `Provider contour guide · ${focusedProviderContour.source}`
+      ? `${focusedProviderContour.kind === "line" ? "Provider guide" : "Provider contour guide"} · ${focusedProviderContour.source}`
       : "Approximate guide — provider contour data was not returned for this measurement."
     : null;
 
@@ -2573,7 +2716,7 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         {guideQualityMessage && <p className={cn("model-3d-guide-quality", focusedProviderContour ? "exact" : "approximate")} role="status">{guideQualityMessage}</p>}
       </div>
       <div className="model-3d-controls" role="group" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { hasUserInteractedRef.current = true; controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-out" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div>
-       <p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Click a colored guide or measurement row to highlight it. Drag to turn the model; scroll or pinch to zoom. With keyboard focus, use the arrow keys, +/−, or Home.</p>
+        <p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Click a colored guide or measurement row to highlight it. Drag to turn the model. Use Ctrl/⌘ + scroll, pinch, or the zoom buttons below to zoom. With keyboard focus, use the arrow keys, +/−, or Home.</p>
       {reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}
     </div>
   );
@@ -2665,7 +2808,9 @@ function ProfilePage({ profile, onProfileChange }: { profile: Profile; onProfile
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const save = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError(""); setNotice("");
+    event.preventDefault(); setError(""); setNotice("");
+    if (phone.trim() && !/^\+?[0-9\s\-()]{7,20}$/.test(phone.trim())) { setError("Enter a valid phone number in international format, e.g. +15551234567"); return; }
+    setBusy(true);
     try { const updated = await updateProfile(profile.id, { first_name: firstName, last_name: lastName, phone: phone.trim() || null, email_notifications: emailNotifications, sms_notifications: smsNotifications, unit_system: unit }); onProfileChange(updated); setPhone(updated.phone ?? ""); setEmailNotifications(updated.email_notifications); setSmsNotifications(updated.sms_notifications); setNotice("Profile and notification preferences updated."); } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
   };
   const passwordReset = async () => {
@@ -2754,9 +2899,10 @@ function DressmakerOrders({ profile }: { profile: Profile }) {
   if (!profile.organization_id) return <div className="page-stack"><SectionHeader eyebrow="ORDERS" title="Order board" description="Order access is scoped to your assigned organization." /><OrganizationRequired role="dressmaker" /></div>;
   const state = useAsyncData(() => listOrgOrders(profile.organization_id!), [profile.organization_id], []);
   const orders = state.data ?? [];
+  const [actionError, setActionError] = useState("");
   const advance: Partial<Record<Order["status"], Order["status"]>> = { new: "accepted", accepted: "in_production", in_production: "for_fitting", for_fitting: "ready_for_pickup", ready_for_pickup: "completed" };
-  const update = async (order: Order) => { const next = advance[order.status]; if (!next) return; try { await updateOrderStatus(order.id, next); state.reload(); } catch { /* the error remains visible after the next reload */ } };
-  return <div className="page-stack"><SectionHeader eyebrow="DRESSMAKER WORKROOM · ORDERS" title="Order board" description="Move organization orders through their real production status." action={<Button variant="secondary" icon="refresh" onClick={state.reload}>Refresh</Button>} />{state.loading ? <LoadingState /> : state.error ? <ErrorState message={state.error} onRetry={state.reload} /> : <Panel className="order-list-panel"><div className="panel-heading"><div><p className="eyebrow">ORGANIZATION ORDERS</p><h2>{orders.length ? `${orders.length} order${orders.length === 1 ? "" : "s"}` : "No orders yet"}</h2></div><Badge tone="neutral">Role-scoped</Badge></div>{orders.length === 0 ? <DataState icon="bag" title="No orders yet" body="Customer order requests assigned to this organization will appear here." /> : <div className="order-list">{orders.map((order) => <div className="order-card" key={order.id}><span className="order-icon"><Icon name="dress" size={18} /></span><span><strong>{order.garment_type}</strong><small>Created {formatDate(order.created_at)} · Customer {order.customer_id.slice(0, 8)}</small></span><Badge tone={order.status === "completed" ? "success" : order.status === "cancelled" ? "danger" : "teal"}>{orderStatusLabel(order.status)}</Badge><Button variant="ghost" onClick={() => void update(order)} disabled={!advance[order.status]} icon="arrow-right">{advance[order.status] ? "Advance" : "Complete"}</Button></div>)}</div>}</Panel>}</div>;
+  const update = async (order: Order) => { const next = advance[order.status]; if (!next) return; setActionError(""); try { await updateOrderStatus(order.id, next); state.reload(); } catch (error) { setActionError(error instanceof Error ? error.message : "The update did not complete."); } };
+  return <div className="page-stack"><SectionHeader eyebrow="DRESSMAKER WORKROOM · ORDERS" title="Order board" description="Move organization orders through their real production status." action={<Button variant="secondary" icon="refresh" onClick={state.reload}>Refresh</Button>} />{state.loading ? <LoadingState /> : state.error ? <ErrorState message={state.error} onRetry={state.reload} /> : <Panel className="order-list-panel"><div className="panel-heading"><div><p className="eyebrow">ORGANIZATION ORDERS</p><h2>{orders.length ? `${orders.length} order${orders.length === 1 ? "" : "s"}` : "No orders yet"}</h2></div><Badge tone="neutral">Role-scoped</Badge></div>{actionError && <InlineError message={actionError} />}{orders.length === 0 ? <DataState icon="bag" title="No orders yet" body="Customer order requests assigned to this organization will appear here." /> : <div className="order-list">{orders.map((order) => <div className="order-card" key={order.id}><span className="order-icon"><Icon name="dress" size={18} /></span><span><strong>{order.garment_type}</strong><small>Created {formatDate(order.created_at)} · Customer {order.customer_id.slice(0, 8)}</small></span><Badge tone={order.status === "completed" ? "success" : order.status === "cancelled" ? "danger" : "teal"}>{orderStatusLabel(order.status)}</Badge><Button variant="ghost" onClick={() => void update(order)} disabled={!advance[order.status]} icon="arrow-right">{advance[order.status] ? "Advance" : "Complete"}</Button></div>)}</div>}</Panel>}</div>;
 }
 
 function DressmakerFittings({ profile }: { profile: Profile }) {
@@ -2779,7 +2925,7 @@ function DressmakerFittings({ profile }: { profile: Profile }) {
     setBusy(true);
     try { await createFitting({ orderId, startsAt: new Date(startsAt).toISOString(), location, notes: "" }); setFormNotice("Fitting request created."); setOrderId(""); setStartsAt(""); setLocation(""); fittingsState.reload(); } catch (reason: unknown) { setFormError(readableError(reason)); } finally { setBusy(false); }
   };
-  const update = async (fitting: Fitting, status: Fitting["status"]) => { try { await updateFittingStatus(fitting.id, status); fittingsState.reload(); } catch (reason: unknown) { setFormError(readableError(reason)); } };
+  const update = async (fitting: Fitting, status: Fitting["status"]) => { setFormError(""); try { await updateFittingStatus(fitting.id, status); fittingsState.reload(); } catch (error) { setFormError(error instanceof Error ? error.message : "The update did not complete."); } };
   return <div className="page-stack"><SectionHeader eyebrow="DRESSMAKER WORKROOM · FITTINGS" title="Fitting schedule" description="Create and confirm appointments against organization orders." action={<Button variant="secondary" icon="refresh" onClick={() => { ordersState.reload(); fittingsState.reload(); }}>Refresh</Button>} />{ordersState.loading || fittingsState.loading ? <LoadingState /> : ordersState.error || fittingsState.error ? <ErrorState message={ordersState.error || fittingsState.error} onRetry={() => { ordersState.reload(); fittingsState.reload(); }} /> : <div className="fitting-layout"><Panel className="schedule-table-panel"><div className="panel-heading"><div><p className="eyebrow">UPCOMING & PAST</p><h2>{fittings.length ? `${fittings.length} appointment${fittings.length === 1 ? "" : "s"}` : "No appointments"}</h2></div></div>{fittings.length === 0 ? <DataState icon="calendar" title="No appointments" body="Create the first fitting request from an organization order." /> : <div className="schedule-list">{fittings.map((fitting) => <div className="schedule-item" key={fitting.id}><strong>{formatDateTime(fitting.starts_at)}</strong><span><b>{orderById.get(fitting.order_id)?.garment_type ?? "Order"}</b><small>{fitting.location ?? "Location to be confirmed"}</small></span><Badge tone={fitting.status === "confirmed" ? "success" : fitting.status === "cancelled" ? "danger" : "warning"}>{fittingStatusLabel(fitting.status)}</Badge>{fitting.status === "requested" && <Button variant="ghost" onClick={() => void update(fitting, "confirmed")} icon="check">Confirm</Button>}</div>)}</div>}</Panel><Panel className="invite-form-panel"><span className="invite-form-icon"><Icon name="calendar" size={20} /></span><p className="eyebrow">NEW APPOINTMENT</p><h2>Schedule a fitting.</h2><p>Create a requested appointment for one of the organization’s orders.</p><form className="simple-form" onSubmit={create}><div className="field"><label htmlFor="fitting-order">Order</label><select id="fitting-order" value={orderId} onChange={(event) => setOrderId(event.target.value)}><option value="">Choose an order</option>{orders.filter((order) => order.status !== "cancelled" && order.status !== "completed").map((order) => <option key={order.id} value={order.id}>{order.garment_type} · {order.id.slice(0, 8)}</option>)}</select></div><div className="field"><label htmlFor="fitting-time">Starts at</label><input id="fitting-time" type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></div><Field label="Location" value={location} onChange={setLocation} placeholder="Studio or address" />{formNotice && <div className="form-notice"><Icon name="check" size={15} /> {formNotice}</div>}{formError && <InlineError message={formError} />}<Button type="submit" disabled={busy} icon="calendar">{busy ? "Creating…" : "Create fitting request"}</Button></form></Panel></div>}</div>;
 }
 
@@ -2840,6 +2986,7 @@ function AdminInvitations({ profile }: { profile: Profile }) {
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError(""); setNotice(""); setInviteUrl(""); setRemoveError(""); setRemoveNotice("");
     if (!email.trim() || !organizationId) { setError("Enter an email and choose an organization."); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) { setError("Enter a valid email address."); return; }
     setBusy(true);
     try {
       const result = await inviteDressmaker({ email, organizationId, redirectTo: `${invitationAppOrigin()}/?invite=` });

@@ -4,16 +4,25 @@ import { config, projectRoot, safeDatabaseIdentifier } from "./config.mjs";
 
 let pool = null;
 
-function connectionOptions(includeDatabase = true) {
+function connectionOptions(includeDatabase = true, { multipleStatements = false } = {}) {
   return {
     host: config.db.host,
     port: config.db.port,
     user: config.db.user,
     password: config.db.password,
     ...(includeDatabase ? { database: config.db.name } : {}),
+    // DATETIME columns are UTC values written explicitly by the API. Return
+    // them as strings so the API can append the UTC designator instead of
+    // letting the Windows local timezone shift them eight hours backward.
+    dateStrings: true,
+    timezone: "Z",
     decimalAsNumber: true,
     insertIdAsNumber: false,
-    multipleStatements: true,
+    // multipleStatements stays OFF on the request-serving pool. It is only
+    // enabled on the short-lived connection that applies the multi-statement
+    // schema file, so a future query-building bug cannot become a stacked-query
+    // injection against live traffic.
+    multipleStatements,
   };
 }
 
@@ -52,11 +61,34 @@ export async function initializeDatabase({ applySchema = true } = {}) {
   if (applySchema) {
     const schemaPath = `${projectRoot}/xampp/database/sukatai.sql`;
     const schema = await fs.readFile(schemaPath, "utf8");
-    await pool.query(schema);
+    // The schema file contains multiple statements, so apply it on a dedicated
+    // short-lived connection that opts into multipleStatements rather than the
+    // request-serving pool.
+    const schemaConnection = await mariadb.createConnection(connectionOptions(true, { multipleStatements: true }));
+    try {
+      await schemaConnection.query(schema);
+    } finally {
+      await schemaConnection.end();
+    }
   }
   await ensureColumn("users", "phone", "VARCHAR(32) NULL AFTER email");
   await ensureColumn("users", "email_notifications", "TINYINT(1) NOT NULL DEFAULT 1 AFTER phone");
   await ensureColumn("users", "sms_notifications", "TINYINT(1) NOT NULL DEFAULT 0 AFTER email_notifications");
+  // Email-OTP account verification columns. Added idempotently so an existing
+  // populated users table gains them without data loss (the schema file only
+  // runs CREATE TABLE IF NOT EXISTS and never alters an existing table).
+  await ensureColumn("users", "email_verified", "TINYINT(1) NOT NULL DEFAULT 0 AFTER reset_expires_at");
+  await ensureColumn("users", "verified_at", "DATETIME NULL AFTER email_verified");
+  await ensureColumn("users", "otp_hash", "CHAR(64) NULL AFTER verified_at");
+  await ensureColumn("users", "otp_expires_at", "DATETIME NULL AFTER otp_hash");
+  await ensureColumn("users", "otp_attempts", "TINYINT NOT NULL DEFAULT 0 AFTER otp_expires_at");
+  await ensureColumn("users", "otp_last_sent_at", "DATETIME NULL AFTER otp_attempts");
+  // One-time backfill: every account that predates the OTP feature is marked
+  // verified so only NEW signups are gated. A pending signup always carries a
+  // non-null otp_hash, so it is never caught here. Idempotent (no-op once done).
+  await pool.query(
+    "UPDATE users SET email_verified = 1, verified_at = COALESCE(verified_at, created_at) WHERE email_verified = 0 AND otp_hash IS NULL",
+  );
   await ensureColumn("notifications", "event_key", "VARCHAR(180) NULL AFTER metadata");
   await ensureColumn("scans", "processing_attempts", "INT NOT NULL DEFAULT 0 AFTER processing_version");
   await ensureColumn("scans", "processing_attempt_id", "CHAR(36) NULL AFTER processing_attempts");
@@ -69,6 +101,7 @@ export async function initializeDatabase({ applySchema = true } = {}) {
   await ensureColumn("scans", "processing_error", "VARCHAR(1000) NULL AFTER processing_progress");
   await ensureColumn("measurements", "measurement_method", "VARCHAR(40) NULL AFTER confidence");
   await ensureColumn("measurements", "measurement_source", "VARCHAR(120) NULL AFTER measurement_method");
+  await ensureColumn("orders", "open_scan_key", "VARCHAR(80) GENERATED ALWAYS AS (CASE WHEN status IN ('new', 'accepted', 'in_production', 'for_fitting', 'ready_for_pickup') AND scan_id IS NOT NULL THEN CONCAT(customer_id, ':', scan_id) ELSE NULL END) PERSISTENT");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS scan_processing_attempts (
       id CHAR(36) NOT NULL,
@@ -99,6 +132,7 @@ export async function initializeDatabase({ applySchema = true } = {}) {
     ) ENGINE=InnoDB
   `);
   await ensureIndex("notifications", "notifications_event_key_unique", "UNIQUE KEY `notifications_event_key_unique` (`event_key`)");
+  await ensureIndex("orders", "orders_open_scan_unique", "UNIQUE KEY `orders_open_scan_unique` (`open_scan_key`)");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notification_deliveries (
       id CHAR(36) NOT NULL,

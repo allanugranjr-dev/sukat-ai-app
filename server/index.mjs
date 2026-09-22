@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import bcrypt from "bcryptjs";
@@ -35,7 +35,49 @@ const httpServer = http.createServer(app);
 let io;
 const processingJobs = new Map();
 let processingQueue = Promise.resolve();
+const scanRecoveryIntervalMs = 60_000;
+let scanRecoveryTimer = null;
 const sessionCookieName = "sukatai_node";
+
+// Lightweight in-memory rate limiter for authentication actions. Keeps per-key
+// hit counts in a sliding window so sign-in / sign-up / password-reset cannot be
+// brute-forced. Deployments behind multiple instances should add a shared store,
+// but this closes the wide-open single-instance case with no new dependency.
+const rateLimitBuckets = new Map();
+const authRateLimit = { windowMs: 15 * 60 * 1000, max: 10 };
+
+function rateLimitHit(key) {
+  const now = Date.now();
+  const bucket = rateLimitBuckets.get(key);
+  if (!bucket || now >= bucket.resetAt) {
+    rateLimitBuckets.set(key, { count: 1, resetAt: now + authRateLimit.windowMs });
+    return { limited: false, retryAfterSeconds: 0 };
+  }
+  bucket.count += 1;
+  if (bucket.count > authRateLimit.max) {
+    return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+  }
+  return { limited: false, retryAfterSeconds: 0 };
+}
+
+// Periodically drop expired buckets so the map cannot grow without bound.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateLimitBuckets) {
+    if (now >= bucket.resetAt) rateLimitBuckets.delete(key);
+  }
+}, authRateLimit.windowMs).unref?.();
+
+const rateLimitedActions = new Set(["sign_in", "sign_up", "password_reset_request", "verify_otp", "resend_otp"]);
+
+function clientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+  return forwarded || req.socket?.remoteAddress || "unknown";
+}
+
+// A fixed bcrypt hash used to spend the same time on a missing account as on a
+// real one, so response timing does not reveal whether an email is registered.
+const dummyPasswordHash = "$2a$12$C6UzMDM.H6dfI/f/IKcEeO3n8n8n8n8n8n8n8n8n8n8n8n8n8n8n8";
 const allowedScanStatuses = [
   "draft",
   "uploaded",
@@ -48,6 +90,16 @@ const allowedScanStatuses = [
   "failed",
 ];
 const allowedOrderStatuses = ["new", "accepted", "in_production", "for_fitting", "ready_for_pickup", "completed", "cancelled"];
+const openOrderStatuses = ["new", "accepted", "in_production", "for_fitting", "ready_for_pickup"];
+const orderTransitions = {
+  new: ["accepted", "cancelled"],
+  accepted: ["in_production", "cancelled"],
+  in_production: ["for_fitting", "cancelled"],
+  for_fitting: ["ready_for_pickup", "cancelled"],
+  ready_for_pickup: ["completed", "cancelled"],
+  completed: [],
+  cancelled: [],
+};
 const allowedFittingStatuses = ["requested", "confirmed", "completed", "reschedule_requested", "cancelled"];
 const allowedReviewEvents = ["opened", "adjusted", "approved", "recapture_requested", "photo_accessed", "deleted"];
 const customerScanStatuses = ["draft", "uploaded", "processing_queued", "ready_for_review", "needs_recapture"];
@@ -148,6 +200,41 @@ function dateOnly(value) {
 
 function hashToken(token) {
   return createHash("sha256").update(token).digest("hex");
+}
+
+function generateOtpCode() {
+  return String(randomInt(0, 1000000)).padStart(6, "0");
+}
+
+async function issueOtp(userId) {
+  const code = generateOtpCode();
+  await execute(
+    "UPDATE users SET otp_hash = ?, otp_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE), otp_attempts = 0, otp_last_sent_at = UTC_TIMESTAMP() WHERE id = ?",
+    [hashToken(code), userId],
+  );
+  return code;
+}
+
+async function sendOtpEmail(user, code) {
+  const subject = "Your SukatAI verification code";
+  const firstName = escapeHtml(user.first_name ?? "");
+  const greetingName = firstName ? ` ${firstName}` : "";
+  const text = `Hi${user.first_name ? ` ${user.first_name}` : ""},\n\nYour SukatAI verification code is ${code}. It expires in 10 minutes.\n\nIf you did not request this, you can ignore this email.`;
+  const html = `<p>Hi${greetingName},</p><p>Your SukatAI verification code is <strong style="font-size:20px;letter-spacing:2px">${code}</strong>.</p><p>It expires in 10 minutes.</p><p>If you did not request this, you can ignore this email.</p>`;
+  return await sendEmail({ to: user.email, subject, text, html });
+}
+
+function devCodeAllowed(sendResult) {
+  return !config.isProduction && sendResult && sendResult.status === "not_configured";
+}
+
+function otpVerificationPayload(email, sendResult, code) {
+  return {
+    email,
+    expires_in_seconds: 600,
+    delivery: sendResult?.status ?? "unknown",
+    ...(devCodeAllowed(sendResult) ? { dev_code: code } : {}),
+  };
 }
 
 function isUuid(value) {
@@ -330,14 +417,15 @@ async function dispatchInvitationEmail({ invitationId, invitedBy, email, organiz
 function publicUser(user) {
   const created = isoDate(user.created_at) ?? new Date().toISOString();
   const updated = isoDate(user.updated_at) ?? created;
+  const verifiedAt = user.email_verified ? (isoDate(user.verified_at) ?? created) : null;
   return {
     id: user.id,
     aud: "authenticated",
     role: "authenticated",
     email: user.email,
-    email_confirmed_at: created,
+    email_confirmed_at: verifiedAt,
     phone: user.phone ?? "",
-    confirmed_at: created,
+    confirmed_at: verifiedAt,
     last_sign_in_at: updated,
     app_metadata: { provider: "email", providers: ["email"] },
     user_metadata: { first_name: user.first_name, last_name: user.last_name },
@@ -368,6 +456,7 @@ function profileResponse(user) {
     last_name: user.last_name,
     email: user.email,
     phone: user.phone ?? null,
+    email_verified: Boolean(user.email_verified),
     email_notifications: user.email_notifications === undefined || user.email_notifications === null ? true : booleanInput(user.email_notifications),
     sms_notifications: user.sms_notifications === undefined || user.sms_notifications === null ? false : booleanInput(user.sms_notifications),
     avatar_url: user.avatar_url,
@@ -780,7 +869,7 @@ async function processScanJob(scanId) {
     if (!aiEnabled) throw new ApiError("No reconstruction provider is configured. This scan cannot be completed from reference measurements.", 503);
 
     const claim = await execute(
-      "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_provider = ?, processing_attempts = COALESCE(processing_attempts, 0) + 1, processing_started_at = UTC_TIMESTAMP(), processing_completed_at = NULL, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'processing_queued', 'failed', 'draft', 'processing')",
+      "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_provider = ?, processing_attempt_id = NULL, processing_attempts = COALESCE(processing_attempts, 0) + 1, processing_started_at = UTC_TIMESTAMP(), processing_completed_at = NULL, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'processing_queued', 'failed', 'draft', 'needs_recapture', 'processing')",
       ["processing", "processing", 0, 0, processingProvider, scanId],
     );
     if (claim.affectedRows === 0) {
@@ -819,8 +908,8 @@ async function processScanJob(scanId) {
         lastProviderMessage = nextMessage;
         try {
           const update = await execute(
-            "UPDATE scans SET processing_status = ?, processing_progress = COALESCE(?, processing_progress), processing_progress_reported = ?, processing_error = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
-            [nextStatus, nextProgress, nextProgressReported ? 1 : 0, scanId],
+            "UPDATE scans SET processing_status = ?, processing_progress = COALESCE(?, processing_progress), processing_progress_reported = ?, processing_error = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing' AND processing_attempt_id = ?",
+            [nextStatus, nextProgress, nextProgressReported ? 1 : 0, scanId, attemptId],
           );
           if (update.affectedRows > 0 && nextMessage) await emitScanUpdate(scanId, nextStatus, nextMessage);
         } catch (progressError) {
@@ -871,8 +960,8 @@ async function processScanJob(scanId) {
           [randomUUID(), scanId, processingProvider, providerResult.modelPath, jsonParameter(previewData), "ready"],
         );
         const finalUpdate = await connection.query(
-          "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_provider = ?, processing_version = ?, processing_attempt_id = ?, processing_completed_at = UTC_TIMESTAMP(), processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing'",
-          ["ready_to_share", "completed", 100, 1, processingProvider, providerResult.processingVersion, attemptId, scanId],
+          "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_provider = ?, processing_version = ?, processing_attempt_id = ?, processing_completed_at = UTC_TIMESTAMP(), processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'processing' AND processing_attempt_id = ?",
+          ["ready_to_share", "completed", 100, 1, processingProvider, providerResult.processingVersion, attemptId, scanId, attemptId],
         );
         if (finalUpdate.affectedRows === 0) throw new ApiError("The scan changed while it was being processed.", 409);
         await promoteScanAttempt(connection, attemptId);
@@ -887,9 +976,14 @@ async function processScanJob(scanId) {
     try {
       const latest = await findScan(scanId);
       const failureProgress = Math.min(99, Math.max(0, Number(latest?.processing_progress ?? 0)));
+      const failureWhere = attemptId
+        ? "id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified') AND processing_attempt_id = ?"
+        : "id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')";
+      const failureParams = ["failed", "failed", failureProgress, failureMessage.slice(0, 1000), aiEnabled ? "provider_failed" : "provider_not_configured", failureMessage.slice(0, 1000), scanId];
+      if (attemptId) failureParams.push(attemptId);
       const result = await execute(
-        "UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, failure_reason = ?, processing_error_code = ?, processing_error = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')",
-        ["failed", "failed", failureProgress, failureMessage.slice(0, 1000), aiEnabled ? "provider_failed" : "provider_not_configured", failureMessage.slice(0, 1000), scanId],
+        `UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, failure_reason = ?, processing_error_code = ?, processing_error = ?, updated_at = UTC_TIMESTAMP() WHERE ${failureWhere}`,
+        failureParams,
       );
       try {
         await failScanAttempt(attemptId, aiEnabled ? "provider_failed" : "provider_not_configured", failureMessage);
@@ -921,18 +1015,32 @@ async function resumePendingScans() {
   const queued = await rows(
     "SELECT id FROM scans WHERE status = 'processing_queued' OR (status = 'processing' AND updated_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)) ORDER BY updated_at ASC LIMIT 20",
   );
-  queued.forEach((scan) => queueScanProcessing(scan.id));
-  if (queued.length > 0) console.log(`Resumed ${queued.length} pending scan${queued.length === 1 ? "" : "s"}.`);
+  const resumed = queued.filter((scan) => queueScanProcessing(scan.id)).length;
+  if (resumed > 0) console.log(`Resumed ${resumed} pending scan${resumed === 1 ? "" : "s"}.`);
 }
 
 function isDuplicateError(error) {
   return Boolean(error && (error.errno === 1062 || error.code === "ER_DUP_ENTRY"));
 }
 
+function isAllowedOrderTransition(currentStatus, nextStatus) {
+  return currentStatus === nextStatus || orderTransitions[currentStatus]?.includes(nextStatus) === true;
+}
+
 async function handleAction(req, res) {
   const action = stringInput(req.query ?? {}, "action", "") ?? "";
   if (req.method !== "POST" && !getActions.has(action)) throw new ApiError("Use POST for this action.", 405);
   const data = requestData(req);
+
+  // Throttle authentication actions per client IP to block brute-force and
+  // account-enumeration bursts before any credential work runs.
+  if (rateLimitedActions.has(action)) {
+    const { limited, retryAfterSeconds } = rateLimitHit(`${action}:${clientIp(req)}`);
+    if (limited) {
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      throw new ApiError("Too many attempts. Please wait a few minutes and try again.", 429);
+    }
+  }
 
   switch (action) {
     case "health":
@@ -954,7 +1062,17 @@ async function handleAction(req, res) {
       const email = (stringInput(data, "email", "") ?? "").toLowerCase();
       const password = stringInput(data, "password", "") ?? "";
       const user = await row("SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
-      if (!user || !(await bcrypt.compare(password, user.password_hash))) throw new ApiError("The email or password is incorrect.", 401);
+      // Always run a bcrypt comparison, even when the account does not exist, so
+      // the response time does not reveal whether an email is registered.
+      const passwordMatches = await bcrypt.compare(password, user?.password_hash ?? dummyPasswordHash);
+      if (!user || !passwordMatches) throw new ApiError("The email or password is incorrect.", 401);
+      // Unverified accounts cannot sign in: issue a fresh OTP and route the
+      // client to the verification screen instead of minting a session.
+      if (!user.email_verified) {
+        const code = await issueOtp(user.id);
+        const send = await sendOtpEmail(user, code);
+        return sendData(res, { session: null, user: publicUser(user), verification: otpVerificationPayload(user.email, send, code) });
+      }
       await createSession(res, user.id);
       return sendData(res, { session: sessionPayload(user), user: publicUser(user) });
     }
@@ -978,8 +1096,54 @@ async function handleAction(req, res) {
         throw error;
       }
       const user = await row("SELECT * FROM users WHERE id = ? LIMIT 1", [id]);
-      await createSession(res, id);
+      // Do not sign the account in yet. Issue a one-time code and require the
+      // user to verify their email before a session is minted.
+      const code = await issueOtp(id);
+      const send = await sendOtpEmail(user, code);
+      return sendData(res, { session: null, user: publicUser(user), verification: otpVerificationPayload(email, send, code) });
+    }
+
+    case "verify_otp": {
+      const email = (stringInput(data, "email", "") ?? "").toLowerCase();
+      const code = (stringInput(data, "code", "") ?? "").trim();
+      const fresh = await row(
+        "SELECT id, otp_hash, otp_attempts, (otp_expires_at > UTC_TIMESTAMP()) AS not_expired FROM users WHERE email = ? LIMIT 1",
+        [email],
+      );
+      if (!fresh || !fresh.otp_hash) throw new ApiError("Request a new verification code.", 400);
+      if (!fresh.not_expired) {
+        await execute("UPDATE users SET otp_hash = NULL, otp_expires_at = NULL WHERE id = ?", [fresh.id]);
+        throw new ApiError("That code has expired. Request a new one.", 400);
+      }
+      if (fresh.otp_attempts >= 5) throw new ApiError("Too many incorrect attempts. Request a new code.", 429);
+      if (hashToken(code) !== fresh.otp_hash) {
+        await execute("UPDATE users SET otp_attempts = otp_attempts + 1 WHERE id = ?", [fresh.id]);
+        throw new ApiError("That code is incorrect.", 400);
+      }
+      await execute(
+        "UPDATE users SET email_verified = 1, verified_at = UTC_TIMESTAMP(), otp_hash = NULL, otp_expires_at = NULL, otp_attempts = 0 WHERE id = ?",
+        [fresh.id],
+      );
+      const user = await row("SELECT * FROM users WHERE id = ? LIMIT 1", [fresh.id]);
+      await createSession(res, fresh.id);
       return sendData(res, { session: sessionPayload(user), user: publicUser(user) });
+    }
+
+    case "resend_otp": {
+      const email = (stringInput(data, "email", "") ?? "").toLowerCase();
+      const candidate = await row(
+        "SELECT id, email_verified, (otp_last_sent_at IS NULL OR otp_last_sent_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 45 SECOND)) AS can_send FROM users WHERE email = ? LIMIT 1",
+        [email],
+      );
+      // Anti-enumeration: always return the same success shape. Only actually
+      // re-issue when the account exists, is unverified, and the cooldown passed.
+      if (candidate && !candidate.email_verified && candidate.can_send) {
+        const user = await row("SELECT * FROM users WHERE id = ? LIMIT 1", [candidate.id]);
+        const code = await issueOtp(user.id);
+        const send = await sendOtpEmail(user, code);
+        return sendData(res, { ok: true, verification: otpVerificationPayload(email, send, code) });
+      }
+      return sendData(res, { ok: true, verification: { email, expires_in_seconds: 600, delivery: "throttled" } });
     }
 
     case "sign_out": {
@@ -1157,6 +1321,9 @@ async function handleAction(req, res) {
         if (!Object.prototype.hasOwnProperty.call(data, field)) continue;
         const value = stringInput(data, field);
         if (field === "status" && !allowedScanStatuses.includes(value)) throw new ApiError("The scan status is invalid.", 400);
+        if (field === "status" && isCustomer && value === "processing_queued" && scan.status === "processing") {
+          throw new ApiError("This scan is already being processed. Wait for the current result or retry it from the processing screen.", 409);
+        }
         if (field === "status" && isCustomer && value === "ready_for_review" && value !== scan.status && scan.status !== "ready_to_share") {
           throw new ApiError("This result can only be shared after processing is complete.", 403);
         }
@@ -1280,8 +1447,18 @@ async function handleAction(req, res) {
       if (scan.status !== "verified") throw new ApiError("Only verified measurements can be attached to an order.", 400);
       const garment = stringInput(data, "garment_type", "") ?? "";
       if (garment.length < 2) throw new ApiError("Enter a garment type.", 400);
+      const activeOrder = await row(
+        `SELECT id FROM orders WHERE customer_id = ? AND scan_id = ? AND status IN (${openOrderStatuses.map(() => "?").join(", ")}) LIMIT 1`,
+        [user.id, scanId, ...openOrderStatuses],
+      );
+      if (activeOrder) throw new ApiError("This measurement set already has an active order. Complete or cancel that order before creating another.", 409);
       const id = randomUUID();
-      await execute("INSERT INTO orders (id, customer_id, organization_id, scan_id, status, garment_type, notes) VALUES (?, ?, ?, ?, ?, ?, ?)", [id, user.id, user.organization_id, scanId, "new", garment.slice(0, 120), stringInput(data, "notes")]);
+      try {
+        await execute("INSERT INTO orders (id, customer_id, organization_id, scan_id, status, garment_type, notes) VALUES (?, ?, ?, ?, ?, ?, ?)", [id, user.id, user.organization_id, scanId, "new", garment.slice(0, 120), stringInput(data, "notes")]);
+      } catch (error) {
+        if (isDuplicateError(error)) throw new ApiError("This measurement set already has an active order. Complete or cancel that order before creating another.", 409);
+        throw error;
+      }
       return sendData(res, orderResponse(await row("SELECT * FROM orders WHERE id = ? LIMIT 1", [id])));
     }
 
@@ -1294,6 +1471,7 @@ async function handleAction(req, res) {
       const status = stringInput(data, "status", "") ?? "";
       if (!allowedOrderStatuses.includes(status)) throw new ApiError("The order status is invalid.", 400);
       if (order.customer_id === user.id && status !== order.status) throw new ApiError("Only your dressmaker can update the production status.", 403);
+      if (!isAllowedOrderTransition(order.status, status)) throw new ApiError("That order status change is not available from the current stage.", 409);
       const update = await execute("UPDATE orders SET status = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status = ?", [status, orderId, order.status]);
       if (update.affectedRows > 0 && status === "ready_for_pickup" && order.status !== status) await dispatchOrderReadyNotifications(orderId);
       return sendData(res, orderResponse(await row("SELECT * FROM orders WHERE id = ? LIMIT 1", [orderId])));
@@ -1377,6 +1555,35 @@ async function handleAction(req, res) {
       return sendData(res, true);
     }
 
+    case "delete_scan": {
+      const user = await requireUser(req);
+      const scanId = stringInput(data, "scan_id", "") ?? "";
+      const scan = await findScan(scanId);
+      if (!scan) throw new ApiError("Scan not found.", 404);
+      if (scan.customer_id !== user.id && user.role !== "admin") throw new ApiError("You cannot remove this scan.", 403);
+      if (!["draft", "failed"].includes(scan.status)) throw new ApiError("Only draft or failed scans can be removed.", 409);
+      const linkedOrder = await row("SELECT id FROM orders WHERE scan_id = ? LIMIT 1", [scanId]);
+      if (linkedOrder) throw new ApiError("This scan is attached to an order and cannot be removed.", 409);
+      const assets = await rows("SELECT storage_path FROM scan_assets WHERE scan_id = ?", [scanId]);
+      const model = await row("SELECT model_url_or_path FROM body_models WHERE scan_id = ? LIMIT 1", [scanId]);
+      for (const asset of assets) {
+        try { await fs.rm(await storageFile(asset.storage_path), { force: true }); } catch (error) { if (!(error instanceof ApiError && error.status === 404)) throw error; }
+      }
+      if (model?.model_url_or_path && !/^https?:\/\//i.test(model.model_url_or_path) && model.model_url_or_path !== "local-reference-3d-body-scan") {
+        try { await fs.rm(await storageFile(model.model_url_or_path), { force: true }); } catch (error) { if (!(error instanceof ApiError && error.status === 404)) throw error; }
+      }
+      await transaction(async (connection) => {
+        await connection.query("DELETE FROM measurement_review_events WHERE scan_id = ?", [scanId]);
+        await connection.query("DELETE FROM measurements WHERE scan_id = ?", [scanId]);
+        await connection.query("DELETE FROM body_models WHERE scan_id = ?", [scanId]);
+        await connection.query("DELETE FROM scan_assets WHERE scan_id = ?", [scanId]);
+        await connection.query("DELETE FROM scan_processing_attempts WHERE scan_id = ?", [scanId]);
+        const result = await connection.query("DELETE FROM scans WHERE id = ? AND status IN ('draft', 'failed')", [scanId]);
+        if (result.affectedRows !== 1) throw new ApiError("The scan changed before it could be removed.", 409);
+      });
+      return sendData(res, true);
+    }
+
     case "signed_url": {
       const user = await requireUser(req);
       const bucket = stringInput(data, "bucket", "") ?? "";
@@ -1403,6 +1610,17 @@ async function handleAction(req, res) {
     case "process_scan": {
       const user = await requireUser(req);
       const scan = await requireScan(stringInput(data, "scan_id", "") ?? "", user);
+      if (["ready_to_share", "ready_for_review", "verified"].includes(scan.status)) {
+        return sendData(res, { status: scan.status, message: scan.status === "ready_to_share" ? "Your scan result is ready to review and share." : "Your scan result is already ready for review." });
+      }
+      // Processing requests are retried by the browser while the page is
+      // opening. Reuse the durable job instead of resetting an active scan,
+      // which used to make its final promotion fail with a stale-status error.
+      if (scan.status === "processing_queued" || scan.status === "processing") {
+        if (!processingJobs.has(scan.id)) queueScanProcessing(scan.id);
+        const current = await findScan(scan.id);
+        return sendData(res, scanProcessingResponse(current ?? scan), scan.status === "processing_queued" ? 202 : 200);
+      }
       const assets = await rows("SELECT * FROM scan_assets WHERE scan_id = ?", [scan.id]);
       const types = new Set(assets.map((asset) => asset.asset_type));
       if (["front", "side"].some((required) => !types.has(required))) {
@@ -1421,8 +1639,18 @@ async function handleAction(req, res) {
         await emitScanUpdate(scan.id, "failed", message);
         return sendData(res, { status: "failed", message });
       }
-      if (["ready_to_share", "ready_for_review", "verified"].includes(scan.status)) return sendData(res, { status: scan.status, message: scan.status === "ready_to_share" ? "Your scan result is ready to review and share." : "Your scan result is already ready for review." });
-      await execute("UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status NOT IN ('ready_to_share', 'ready_for_review', 'verified')", ["processing_queued", "queued", 0, 0, scan.id]);
+      const queuedUpdate = await execute("UPDATE scans SET status = ?, processing_status = ?, processing_progress = ?, processing_progress_reported = ?, processing_attempt_id = NULL, processing_error_code = NULL, processing_error = NULL, failure_reason = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND status IN ('uploaded', 'failed', 'draft', 'needs_recapture')", ["processing_queued", "queued", 0, 0, scan.id]);
+      if (queuedUpdate.affectedRows === 0) {
+        const current = await findScan(scan.id);
+        if (["ready_to_share", "ready_for_review", "verified"].includes(current?.status)) {
+          return sendData(res, { status: current.status, message: current.status === "ready_to_share" ? "Your scan result is ready to review and share." : "Your scan result is already ready for review." });
+        }
+        if (current && (current.status === "processing_queued" || current.status === "processing")) {
+          if (!processingJobs.has(current.id)) queueScanProcessing(current.id);
+          return sendData(res, scanProcessingResponse(current), current.status === "processing_queued" ? 202 : 200);
+        }
+        throw new ApiError("This scan is not ready to process.", 409);
+      }
       queueScanProcessing(scan.id);
       return sendData(res, { status: "queued", progress: 0, progress_reported: false, message: "Scan processing has been queued." }, 202);
     }
@@ -1446,6 +1674,26 @@ app.use((req, res, next) => {
   res.setHeader("Vary", "Origin");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "same-origin");
+  // Clickjacking + transport hardening applied to every response (the SPA HTML
+  // and JSON API included), not only the asset route.
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Content-Security-Policy", [
+    "default-src 'self'",
+    // Vite injects an inline module bootstrap; styles.css and Google Fonts.
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    "connect-src 'self' ws: wss: https:",
+    "worker-src 'self' blob:",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join("; "));
+  // HSTS only makes sense once the deployment is HTTPS (cookieSecure signals it).
+  if (config.cookieSecure) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Requested-With");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
@@ -1528,9 +1776,17 @@ export async function startServer() {
   console.log(`MariaDB database: ${config.db.name}@${config.db.host}:${config.db.port}`);
   console.log("Socket.IO live updates are enabled.");
   await resumePendingScans();
+  scanRecoveryTimer = setInterval(() => {
+    void resumePendingScans().catch((error) => console.error("Could not recover pending scans:", error));
+  }, scanRecoveryIntervalMs);
+  scanRecoveryTimer.unref?.();
 }
 
 async function stopServer() {
+  if (scanRecoveryTimer) {
+    clearInterval(scanRecoveryTimer);
+    scanRecoveryTimer = null;
+  }
   await new Promise((resolve) => httpServer.close(resolve));
   await closeDatabase();
 }
