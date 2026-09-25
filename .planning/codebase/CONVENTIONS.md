@@ -1,111 +1,103 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-09-01
+**Analysis Date:** 2026-09-25
+
+SukatAI spans four runtimes with distinct-but-related conventions. Match the runtime you are editing:
+- **React/TS SPA** — root `src/`, ESM, TypeScript strict
+- **Node/Express gateway** — `server/`, ESM `.mjs`, plain JS
+- **Python FastAPI AI service** — `ai-service/app/`, Python 3.12, ruff
+- **PHP/XAMPP API** — `xampp/api/`, PHP 8 `declare(strict_types=1)`
 
 ## Naming Patterns
 
 **Files:**
-- Use lower camel case for TypeScript feature/helper modules, such as `src/lib/measurementMapping.ts`, `src/lib/invitationLifecycle.ts`, and `src/lib/reconstructionProvider.ts`.
-- Use PascalCase only for React component files, currently `src/App.tsx`; use lower case names for entry points such as `src/main.tsx`.
-- Use snake_case for Python modules and tests, such as `ai-service/app/validation/image_validator.py` and `ai-service/tests/test_image_validation.py`.
-- Use `.mjs` for Node server modules, such as `server/aiService.mjs` and `server/database.mjs`.
+- SPA library: camelCase `.ts` — `src/lib/scanFlow.ts`, `src/lib/nodeApi.ts`, `src/lib/orderWorkflow.ts`. React components/entry are `.tsx` (`src/App.tsx`, `src/main.tsx`).
+- Node gateway: camelCase `.mjs` — `server/index.mjs`, `server/aiService.mjs`, `server/scanProcessingAttempt.mjs`.
+- Python: snake_case modules — `ai-service/app/measurements/calibration.py`, `anthropometry_adapter.py`. Tests `test_*.py`.
+- PHP: lowercase — `xampp/api/index.php`, `config.php`, `mailer.php`.
+- TS/MJS tests: `<name>.test.ts` / `<name>.test.mjs` under `tests/`.
 
 **Functions:**
-- Use lower camel case in TypeScript and JavaScript (`normalizeProviderResponse`, `isRevocableInvitation`, `safeStoragePath`).
-- Use snake_case in Python (`validate_views`, `calibrate_vertices`, `_measurement_values`), with a leading underscore for module-private helpers.
-- Name boolean predicates with `is`, `has`, `can`, or `allowed` (`isHeightValid`, `hasAnyToken`, `allowedOrigin`).
+- TS/JS: `camelCase`, verb-led and intention-revealing — `customerScanJourney`, `validateUpload`, `normalizeProviderResponse`, `resolveNodeApiUrl`, `rateLimitHit`.
+- Python: `snake_case`, module-private helpers prefixed `_` — `_authorized`, `_error_response`, `_validate_scan_id`, `calibrate_vertices`, `mesh_height`.
+- PHP: `camelCase` — `jsonResponse()`.
 
 **Variables:**
-- Use lower camel case in TypeScript/JavaScript and snake_case in Python.
-- Prefer specific names that expose boundary intent: `expectedScanId`, `rawConfidence`, `validation_issues`, and `max_upload_bytes`.
-- Use `const` by default in TypeScript/JavaScript; use `let` only for reassignment, as in `src/lib/measurementMapping.ts` and `server/aiService.mjs`.
+- TS/JS: `camelCase`; module constants `camelCase` too (`scanSteps`, `authRateLimit`, `sessionCookieName`). Numeric separators used for readability — `15 * 60 * 1000`, `60_000`, `15_000`.
+- Python: `snake_case`; module-level singletons lowercase (`settings`, `pipeline`, `stored_scans`).
 
 **Types:**
-- Export PascalCase TypeScript types and interfaces from `src/lib/types.ts` or the owning helper module (`InvitationState`, `ModelMeasurementMatchOptions`).
-- Prefer string-literal unions for bounded TypeScript values, e.g. `"circumference" | "length" | "width"` in `src/lib/measurementMapping.ts`.
-- Use PascalCase Python classes and Pydantic models (`BodyScanPipeline`, `MeasurementValue`), and enum members that mirror serialized API strings in `ai-service/app/schemas/api.py`.
+- TS: `PascalCase` type aliases and unions, exported alongside code — `CustomerScanJourney`, `ScanStep`, `NodeRequestOptions`, `NodeScanStatusEvent`. String-literal unions preferred over enums (`"success" | "warning" | "danger"`).
+- Python: `PascalCase` classes / dataclasses / Pydantic models — `CalibrationResult`, `CalibrationError`, `BodyScanResponse`, `Settings`. `@dataclass(frozen=True)` for value objects.
+- PHP: `PascalCase` classes — `SukatApiException`.
 
 ## Code Style
 
 **Formatting:**
-- No Prettier, Biome, or JavaScript formatter configuration is detected. Preserve the surrounding file's existing formatting.
-- TypeScript/JavaScript uses two-space indentation, semicolons, double-quoted strings, trailing commas in multiline literals, and a final newline. Follow `src/lib/scanFlow.ts` and `server/aiService.mjs`.
-- Python follows four-space indentation, double-quoted strings, type annotations, and a 120-character Ruff line limit configured in `ai-service/pyproject.toml`.
-- Keep long TypeScript imports and expressions on one line only when readable; otherwise use the hanging, comma-terminated multiline style in `src/lib/measurementMapping.ts`.
+- No Prettier/ESLint config present. TS/JS style: 2-space indent, double quotes, semicolons, trailing commas in multiline literals.
+- Python: `ruff` configured in `ai-service/pyproject.toml` — `line-length = 120`, `target-version = "py312"`.
+- PHP: 4-space indent, `declare(strict_types=1)` at top of every entry file.
 
-**Linting:**
-- Run `npm run typecheck` (alias `npm run lint`) for the frontend TypeScript check; `tsconfig.json` enables `strict`, `isolatedModules`, and `forceConsistentCasingInFileNames`.
-- No ESLint configuration is detected. Do not assume JSX, import-order, or unused-variable rules beyond TypeScript checking.
-- Python config declares Ruff settings in `ai-service/pyproject.toml`; add Python code that is compatible with its `py311` target and 120-character limit.
+**Linting / type checking:**
+- `npm run lint` and `npm run typecheck` both run `tsc --noEmit` (no separate linter). `tsconfig.json` is `strict: true`, `forceConsistentCasingInFileNames`, `isolatedModules`, `moduleResolution: "Bundler"`, JSX `react-jsx`, `types: ["vitest/globals"]`.
+- Python: `ruff` (invoke `ruff check ai-service`). No mypy config detected.
 
 ## Import Organization
 
-**Order:**
-1. Platform/runtime imports (`node:fs/promises`, `path`, `dataclasses`, `typing`)
-2. Third-party imports (`vitest`, `numpy`, `fastapi`, `PIL`)
-3. Application modules (`./config.mjs`, `app.schemas.api`, `../src/lib/...`)
-4. Type-only imports in TypeScript, using `import type`, normally adjacent to related local imports
+**TS/MJS order** (blank-line separated groups):
+1. Third-party / node builtins (`node:fs/promises`, `express`, `socket.io`, `bcryptjs`)
+2. Local modules (`./config.mjs`, `./database.mjs`, `../src/lib/...`)
 
-Leave a blank line between groups, as shown in `server/aiService.mjs`, `vite.config.ts`, and `ai-service/app/pipeline.py`.
+Example from `server/index.mjs`: node builtins first, then npm packages, then local `.mjs`.
+
+**Python order** (`from __future__ import annotations` always first):
+1. `from __future__ import annotations`
+2. stdlib (`asyncio`, `pathlib`, `uuid`)
+3. third-party (`fastapi`, `numpy`)
+4. local `app.*`
 
 **Path Aliases:**
-- No TypeScript path aliases are configured in `tsconfig.json`; use relative paths from the importing file.
-- The Python test suite places `ai-service/` on `sys.path` in `ai-service/tests/conftest.py`; import application code from the `app` package.
+- None. SPA uses relative imports; Python uses absolute `app.*` (pythonpath `.` set in `pyproject.toml` and `conftest.py`).
 
 ## Error Handling
 
-**Patterns:**
-- Validate untrusted data at boundaries and return/throw explicit, user-safe errors. `server/aiService.mjs` rejects invalid provider payloads and paths before using them.
-- Return `null` for expected non-matches or invalid optional values in pure mapping helpers, as in `src/lib/measurementMapping.ts`; use thrown `Error` for invalid required provider responses.
-- Define domain-specific Python exceptions carrying structured context (`PipelineFailure` in `ai-service/app/pipeline.py`, `ImageValidationError` in `ai-service/app/validation/image_validator.py`). Chain caught exceptions with `raise ... from error`.
-- In FastAPI-facing code, translate lower-level failures into stable error codes and HTTP statuses rather than exposing implementation errors.
-- In Node routes, propagate expected failures through `ApiError` and centralized response handling in `server/index.mjs`.
+**TS SPA:** Throw `Error` with user-facing, honest messages; catch at boundary. `nodeRequest` distinguishes abort/timeout (`"...did not respond in time..."`) from API errors, uses `AbortController` + `finally` cleanup (`src/lib/nodeApi.ts`).
+
+**Node gateway:** Custom `class ApiError extends Error` carrying a `status` (default 400) — `server/index.mjs:25`. Sanitize errors before returning to clients (`safeProcessingErrorMessage`).
+
+**Python:** Domain-specific exception subclasses — `CalibrationError(ValueError)`, `PipelineFailure`. Validate inputs early and raise with precise messages (`calibrate_vertices` rejects non-finite / out-of-range heights). API layer converts failures to structured `ErrorResponse` via `_error_response` → `JSONResponse` with proper status code.
+
+**PHP:** `class SukatApiException extends RuntimeException` with a `$status` field; `jsonResponse()` / error path emit `{ ok, data }` / `{ ok, message }` JSON envelopes.
+
+## Response Envelope Convention
+
+All backends return a consistent envelope so the SPA can treat them interchangeably:
+- Node & PHP: `{ ok: boolean, data?, message? }` (`payload?.ok` checked in `nodeRequest`).
+- Python AI service: typed Pydantic response models (`BodyScanResponse`, `ErrorResponse`).
 
 ## Logging
 
-**Framework:** console
-
-**Patterns:**
-- Use `console.log` for Node service lifecycle messages and `console.error` for top-level startup failures in `server/index.mjs`.
-- Do not log raw scan images, credentials, session tokens, or complete provider payloads. Existing request paths report concise safe messages instead.
-- Python application modules do not use a logging framework; preserve the current pattern of structured API errors unless a logging facility is introduced deliberately.
+- No shared logging framework. Node/PHP keep responses quiet and avoid leaking internals to clients. Python relies on FastAPI/uvicorn logging plus explicit failure objects.
 
 ## Comments
 
-**When to Comment:**
-- Comment non-obvious domain decisions, invariants, and security boundaries, not routine mechanics. Examples include the adapter compatibility explanation in `src/lib/measurementMapping.ts` and the `auto` backend rationale in `ai-service/app/pipeline.py`.
-- Use concise line comments to explain deliberately conservative behavior, such as image-validation warnings in `ai-service/app/validation/image_validator.py`.
+**When to Comment:** Explain *why* / security reasoning, not *what*. Strong examples in `server/index.mjs` (rate-limiter rationale, `X-Forwarded-For` trust model) and `ai-service/app/main.py` (`_with_model_url` explains same-origin relative paths).
 
-**JSDoc/TSDoc:**
-- Use short JSDoc for exported functions with non-obvious normalization or selection rules, as in `normalizeModelMeasurementKey` and `measurementGuideKey` in `src/lib/measurementMapping.ts`.
-- Python uses class docstrings for public domain services and exceptions (`BodyScanPipeline`, `PipelineFailure`); add them when a class encapsulates a cross-step responsibility.
+**JSDoc/Docstrings:** Sparse. TS uses `/** ... */` on exported behavior functions (`customerScanJourney` in `src/lib/scanFlow.ts`). Python uses inline comments over formal docstrings.
 
 ## Function Design
 
-**Size:**
-- Keep pure client-side rules in small exported helpers under `src/lib/`, enabling direct Vitest coverage. Split reusable predicates from orchestration, as `invitationState` and `isRevocableInvitation` do in `src/lib/invitationLifecycle.ts`.
-- Server action dispatch and pipeline orchestration are necessarily larger; extract repeated validation, serialization, storage, and error conversion into named helpers before adding another branch to `server/index.mjs` or `ai-service/app/pipeline.py`.
-
-**Parameters:**
-- Accept explicit primitive values and typed records. Use `Pick<T, ...>` when a helper needs only a subset of a domain entity, as in `src/lib/invitationLifecycle.ts`.
-- Supply optional behavior through a typed options object with a default (`ModelMeasurementMatchOptions = {}`), not a long positional argument list.
-- In Python, accept injectable `Settings` objects and standard `Path` values so code remains testable without process-wide environment mutation.
-
-**Return Values:**
-- Return precise TypeScript annotations for exported functions and Python annotations for public functions.
-- Use `undefined` for a missing TypeScript search result (`findModelMeasurement`), `null` for a deliberately unsupported mapping (`measurementGuideKey`), and explicit exceptions for invalid required input.
-- Return Pydantic response models from Python pipeline work rather than unvalidated dictionaries; see `ai-service/app/pipeline.py`.
+- Small, pure, single-purpose functions favored (`isHeightValid`, `previousScanPosition`, `mesh_height`).
+- Options passed as a single typed object in TS (`NodeRequestOptions`) rather than long positional lists.
+- Python uses keyword/`Annotated` FastAPI dependency injection (`Depends`, `Header()`), frozen dataclasses for results.
+- Validate-and-narrow at boundaries; return normalized shapes.
 
 ## Module Design
 
-**Exports:**
-- Prefer named exports for reusable TypeScript/JavaScript functions. `src/lib/invitationLifecycle.ts`, `src/lib/scanFlow.ts`, and `server/aiService.mjs` are the model.
-- Keep internal helpers unexported unless tests or another module need the boundary. `normalizeProviderResponse` is exported from `server/aiService.mjs` specifically for direct contract testing.
-- Keep Python package boundaries explicit with `__init__.py`; expose API schemas and service objects from their owning modules.
+**Exports:** Named exports throughout (no default exports in `src/lib` or `server/`). Types exported next to the functions that use them.
 
-**Barrel Files:**
-- No TypeScript barrel files are used. Import directly from the owning `src/lib/*.ts` module to keep dependencies explicit.
+**Barrel Files:** Not used in SPA/Node. Python packages use `__init__.py` per directory (`app/measurements/__init__.py`, etc.) but as package markers, not re-export barrels.
 
 ---
 
-*Convention analysis: 2026-09-01*
+*Convention analysis: 2026-09-25*

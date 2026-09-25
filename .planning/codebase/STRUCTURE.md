@@ -1,192 +1,120 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-09-01
+**Analysis Date:** 2026-09-25
 
 ## Directory Layout
 
-```text
-[project-root]/
-├── src/                    # React SPA and browser-side runtime adapters
-│   └── lib/                # Domain operations, providers, types, and pure helpers
-├── server/                 # Node/Express/MariaDB/Socket.IO local runtime
-├── supabase/               # Hosted schema, RLS migrations, Edge Functions, email template
-│   ├── migrations/         # Ordered PostgreSQL schema/security changes
-│   └── functions/          # Privileged Deno endpoint handlers
-├── ai-service/             # Independent Python FastAPI reconstruction package
-│   ├── app/                # API, pipeline, validation, reconstruction, measurements
-│   └── tests/              # Pytest coverage for AI service
-├── xampp/                  # PHP/MySQL fallback runtime and deployment script
-├── tests/                  # Vitest tests for browser-pure workflow helpers
-├── android/                # Generated/configured Capacitor Android shell
-├── ios/                    # Generated/configured Capacitor iOS shell
-├── public/                 # Web assets copied into normal Vite builds
-├── docs/                   # Design and validation documentation
-├── artifacts/              # Captured visual validation output
-├── dist*/                  # Generated Vite build outputs
-└── .planning/codebase/     # GSD codebase maps
+```
+bsit sukat ai app/
+├── src/                    # React SPA (TypeScript)
+│   ├── App.tsx             # Root UI (all views, ~3.3k lines)
+│   ├── main.tsx            # Entry point / bootstrap
+│   ├── styles.css          # Global styles
+│   └── lib/                # Domain logic + backend adapters
+├── server/                 # Node.js Express backend (.mjs)
+├── xampp/                  # PHP/XAMPP backend + storage + DB scripts
+│   ├── api/                # PHP action-router API + PHPMailer
+│   ├── database/           # SQL schema/migrations
+│   └── storage/            # Uploaded scan-captures & body-models (runtime data)
+├── ai-service/             # FastAPI Python AI microservice
+│   ├── app/                # API, pipeline, reconstruction, measurements
+│   ├── models/             # Model assets
+│   ├── output/             # Generated output + diagnostics
+│   ├── scripts/            # AI utility scripts
+│   └── tests/              # Python (pytest) tests
+├── tests/                  # Frontend/Node tests (vitest / node)
+├── scripts/                # Dev/smoke scripts (.mjs)
+├── public/                 # Static assets (+ media)
+├── docs/                   # Documentation
+├── index.html              # SPA HTML shell
+├── vite.config.ts          # Bundler config
+├── tsconfig.json           # TypeScript config
+└── package.json            # Scripts + dependencies
 ```
 
 ## Directory Purposes
 
-**`src/`:**
-
-- Purpose: Web/mobile UI entrypoint and application workflow.
-- Contains: `main.tsx`, monolithic `App.tsx`, `styles.css`, and `lib/`.
-- Key files: `src/main.tsx`, `src/App.tsx`, `src/styles.css`.
-
 **`src/lib/`:**
-
-- Purpose: Keep React components separate from backend/runtime details and reusable workflow calculations.
-- Contains: Auth/data/storage adapters, backend selection, Socket.IO API client, domain interfaces, and pure validation/mapping helpers.
-- Key files: `src/lib/supabase.ts`, `src/lib/data.ts`, `src/lib/auth.ts`, `src/lib/storage.ts`, `src/lib/nodeApi.ts`, `src/lib/types.ts`, `src/lib/scanFlow.ts`.
+- Purpose: All client-side domain logic and backend access
+- Key files: `nodeApi.ts`, `xampp.ts`, `supabase.ts` (adapters); `auth.ts`, `data.ts`, `scanFlow.ts`, `orderWorkflow.ts`, `invitationLifecycle.ts`, `measurementMapping.ts`, `modelContours.ts`, `reconstructionProvider.ts`, `scanResultTruth.ts`, `storage.ts`, `types.ts`
 
 **`server/`:**
+- Purpose: Node Express backend
+- Key files: `index.mjs` (API + Socket.IO), `database.mjs`, `config.mjs`, `aiService.mjs`, `scanProcessingAttempt.mjs`, `setup-db.mjs`, `backup.mjs`
 
-- Purpose: Primary local Node runtime.
-- Contains: Express application, MariaDB bootstrap/query helpers, optional AI gateway, config, database setup, and backup utility.
-- Key files: `server/index.mjs`, `server/database.mjs`, `server/aiService.mjs`, `server/config.mjs`, `server/setup-db.mjs`, `server/backup.mjs`.
-
-**`supabase/`:**
-
-- Purpose: Hosted backend source of truth.
-- Contains: CLI configuration, ordered database migrations, Edge Functions, seed data, and invitation email template.
-- Key files: `supabase/migrations/20260829000000_sukatai_schema.sql`, `supabase/functions/process-scan/index.ts`, `supabase/functions/_shared/auth.ts`.
-
-**`ai-service/`:**
-
-- Purpose: Isolated Python service for image validation, reconstruction, measurements, and GLB output.
-- Contains: FastAPI application package, scripts, pytest suite, dependency manifests, and architecture/model setup docs.
-- Key files: `ai-service/app/main.py`, `ai-service/app/pipeline.py`, `ai-service/app/core/config.py`, `ai-service/pyproject.toml`.
+**`ai-service/app/`:**
+- Purpose: FastAPI service
+- Key files: `main.py`, `pipeline.py`; subpackages `reconstruction/`, `measurements/`, `validation/`, `fitting/`, `evaluation/`, `schemas/`, `core/`
 
 **`xampp/`:**
-
-- Purpose: Apache/PHP/MySQL fallback deployment.
-- Contains: PHP action API, MySQL schema, Apache asset rules, and PowerShell deployment script.
-- Key files: `xampp/api/index.php`, `xampp/database/sukatai.sql`, `xampp/install-xampp.ps1`, `xampp/README.md`.
-
-**`tests/`:**
-
-- Purpose: Fast frontend domain tests independent of browser rendering and backend services.
-- Contains: Vitest files for scan navigation/validation, measurement mapping, invitation lifecycle, and AI gateway response handling.
-- Key files: `tests/scanFlow.test.ts`, `tests/measurementMapping.test.ts`, `tests/invitationLifecycle.test.ts`, `tests/aiService.test.mjs`.
-
-**`android/` and `ios/`:**
-
-- Purpose: Capacitor native shells around the built web app.
-- Contains: platform build configuration, app manifests/delegates, assets, and generated project files.
-- Key files: `android/app/src/main/java/com/sukatai/app/MainActivity.java`, `ios/App/App/AppDelegate.swift`, `capacitor.config.ts`.
+- Purpose: PHP backend mirror + persisted runtime storage
+- Note: `xampp/storage/` holds real uploaded scan data (UUID-nested dirs); treat as data, not code
 
 ## Key File Locations
 
 **Entry Points:**
-
-- `index.html`: Vite HTML host and React mount target.
-- `src/main.tsx`: Web SPA bootstrap.
-- `server/index.mjs`: Node HTTP/Socket.IO entrypoint.
-- `ai-service/app/main.py`: FastAPI/Uvicorn entrypoint.
-- `xampp/api/index.php`: PHP local API entrypoint.
-- `supabase/functions/*/index.ts`: Deployed Supabase Edge Function entrypoints.
+- `src/main.tsx`: SPA bootstrap
+- `server/index.mjs`: Node API server
+- `ai-service/app/main.py`: FastAPI app
+- `xampp/api/index.php`: PHP API
 
 **Configuration:**
-
-- `package.json`: JavaScript scripts and dependencies for web, Node, mobile, and tests.
-- `vite.config.ts`: Mode-specific Vite output/base behavior and mobile asset copying.
-- `capacitor.config.ts`: Shared Capacitor application configuration.
-- `vercel.json`: Hosted Vercel build/runtime selection.
-- `tsconfig.json`: TypeScript compiler settings.
-- `server/config.mjs`: Server-only Node runtime configuration.
-- `ai-service/pyproject.toml`: Python pytest and Ruff configuration.
-- `supabase/config.toml`: Supabase CLI configuration.
+- `vite.config.ts`, `tsconfig.json`: build/types
+- `server/config.mjs`, `ai-service/app/core/config.py`, `xampp/api/config.php`: backend config
+- `.env.node`, `.env.xampp`, `.env.mobile`, `.env.local` (+ `.example` variants): env per runtime
 
 **Core Logic:**
-
-- `src/App.tsx`: Role-aware UI, scan flow orchestration, and model viewer.
-- `src/lib/data.ts`: Domain CRUD and bundle retrieval.
-- `src/lib/auth.ts`: User session/profile/invitation operations.
-- `src/lib/storage.ts`: Private scan/body asset operations.
-- `server/index.mjs`: Local authorization, action routing, persistence orchestration, processing queue, and notifications.
-- `supabase/functions/process-scan/index.ts`: Hosted scan-processing transaction and provider integration.
-- `ai-service/app/pipeline.py`: AI service processing composition.
+- `src/App.tsx`, `src/lib/*`: client
+- `ai-service/app/pipeline.py`: AI orchestration
 
 **Testing:**
-
-- `tests/*.test.ts`: Vitest coverage for TypeScript pure helper modules.
-- `tests/aiService.test.mjs`: Node AI gateway tests.
-- `ai-service/tests/`: Pytest coverage for AI endpoints, calibration, validation, and silhouette pipeline.
+- `tests/*.test.ts` / `*.test.mjs`: frontend + Node
+- `ai-service/tests/test_*.py`: Python
 
 ## Naming Conventions
 
 **Files:**
-
-- Use camelCase TypeScript module filenames in `src/lib/`: `scanFlow.ts`, `measurementMapping.ts`, `reconstructionProvider.ts`.
-- Use PascalCase only for the React root component file: `src/App.tsx`.
-- Use `.mjs` for Node runtime modules: `server/database.mjs`.
-- Use snake_case Python filenames: `ai-service/app/validation/image_validator.py`.
-- Use timestamp-prefixed snake_case SQL migration filenames: `supabase/migrations/20260901010000_measurement_provenance.sql`.
+- Client TS: camelCase modules (`scanFlow.ts`, `nodeApi.ts`); React root PascalCase (`App.tsx`)
+- Node backend: `.mjs`, camelCase (`aiService.mjs`, `scanProcessingAttempt.mjs`)
+- Python: snake_case (`anny_fitter.py`, `image_validator.py`)
+- PHP: lowercase (`index.php`, `mailer.php`)
+- Tests: `*.test.ts` / `*.test.mjs` (JS), `test_*.py` (Python)
 
 **Directories:**
-
-- Group the Python service by responsibility beneath `ai-service/app/`: `core/`, `schemas/`, `validation/`, `reconstruction/`, and `measurements/`.
-- Place each Supabase endpoint in its own kebab-case function directory: `supabase/functions/invite-dressmaker/`.
-- Keep mobile platform output/configuration inside Capacitor-standard `android/` and `ios/` trees; do not add shared business code there.
+- lowercase, hyphenated for services (`ai-service`), single-word for source (`src`, `server`, `xampp`)
 
 ## Where to Add New Code
 
-**New Feature:**
+**New UI feature:**
+- View/logic: extract into `src/` module (avoid growing `src/App.tsx`); shared logic in `src/lib/`
+- Tests: `tests/<name>.test.ts`
 
-- Primary UI/workflow code: add a focused component/function in `src/App.tsx` while the UI remains consolidated there.
-- Runtime-neutral data operation: `src/lib/data.ts`, `src/lib/auth.ts`, or `src/lib/storage.ts`, according to domain.
-- Local Node implementation: add the corresponding action/authorization path in `server/index.mjs`; keep SQL pooling/transactions in `server/database.mjs`.
-- Hosted implementation: add/modify a migration in `supabase/migrations/` and add a dedicated Edge Function in `supabase/functions/` only for privileged server-side behavior.
-- Tests: add a co-located concern-level test in `tests/<module>.test.ts`; use `ai-service/tests/test_<area>.py` for Python pipeline behavior.
+**New backend action:**
+- Node: add handler in `server/index.mjs`; DB access via `server/database.mjs`
+- PHP mirror: add matching action in `xampp/api/index.php`
+- Tests: `tests/<name>.test.mjs`
 
-**New Component/Module:**
+**New AI reconstruction/measurement logic:**
+- Provider: `ai-service/app/reconstruction/`; measurement: `ai-service/app/measurements/`; wire into `ai-service/app/pipeline.py`
+- Schemas: `ai-service/app/schemas/api.py`
+- Tests: `ai-service/tests/test_*.py`
 
-- React component: place within `src/App.tsx` and use the established function-component pattern until the UI is deliberately decomposed.
-- Pure browser helper: create `src/lib/<camelCaseName>.ts`, export it directly, and cover it in `tests/<camelCaseName>.test.ts`.
-- Node backend helper: create `server/<camelCaseName>.mjs` when it isolates a cohesive concern such as `server/aiService.mjs`; import it from `server/index.mjs`.
-- AI capability: add the interface/adapter in the existing relevant `ai-service/app/` subpackage, then compose it from `ai-service/app/pipeline.py`.
-
-**Utilities:**
-
-- Shared frontend helper: `src/lib/`.
-- Shared Supabase function helper: `supabase/functions/_shared/`.
-- Shared AI service helper: the appropriate domain subdirectory in `ai-service/app/`.
-- Avoid putting reusable application logic in `android/`, `ios/`, `dist*/`, `artifacts/`, or `public/`.
+**Utilities/scripts:**
+- Dev scripts: `scripts/`; AI scripts: `ai-service/scripts/`
 
 ## Special Directories
 
-**`dist/`, `dist-node/`, and `dist-mobile/`:**
+**`xampp/storage/`:**
+- Purpose: Uploaded scan-captures and generated body-models (UUID-nested)
+- Generated: Yes (runtime) — Committed: sample data present, should generally be gitignored
 
-- Purpose: Vite build output for Supabase/Vercel, Node, and Capacitor modes.
-- Generated: Yes.
-- Committed: Present in the working tree; regenerate with the mode-specific build scripts in `package.json` rather than editing files directly.
+**`ai-service/output/`:**
+- Purpose: Generated GLB/diagnostic output
+- Generated: Yes — Committed: No (runtime artifacts)
 
 **`public/`:**
-
-- Purpose: Static assets including scan-reference media, favicon, and web manifest.
-- Generated: No.
-- Committed: Yes.
-
-**`artifacts/`:**
-
-- Purpose: Screenshots and platform visual-validation outputs.
-- Generated: Yes, by validation/build workflows.
-- Committed: Present in the working tree.
-
-**`.planning/codebase/`:**
-
-- Purpose: GSD-generated architecture, stack, convention, test, and concern maps.
-- Generated: Yes, by codebase mapping tasks.
-- Committed: Repository-dependent; update only the assigned mapping documents.
-
-**`.env*` files:**
-
-- Purpose: Runtime environment configuration.
-- Generated: No.
-- Committed: Some examples are present; local variants are environment-specific.
-- Treat all as secret-bearing configuration and do not read or place values in source or mapping documents.
+- Purpose: Static assets served as-is — Committed: Yes
 
 ---
 
-*Structure analysis: 2026-09-01*
+*Structure analysis: 2026-09-25*

@@ -1,219 +1,171 @@
-<!-- refreshed: 2026-09-01 -->
+<!-- refreshed: 2026-09-25 -->
 # Architecture
 
-**Analysis Date:** 2026-09-01
+**Analysis Date:** 2026-09-25
 
 ## System Overview
 
 ```text
-┌─────────────────────────────────────────────────────────────────────┐
-│ React single-page application                                         │
-│ `src/main.tsx` → `src/App.tsx`                                       │
-├──────────────────┬─────────────────────┬────────────────────────────┤
-│ UI/workflows     │ Runtime adapters    │ optional mobile shells      │
-│ `src/App.tsx`    │ `src/lib/`          │ `android/`, `ios/`          │
-└────────┬─────────┴──────────┬──────────┴────────────────────────────┘
-         │                    │
-         │                    ├──────────────────┐
-         ▼                    ▼                  ▼
-┌──────────────────┐ ┌──────────────────┐ ┌──────────────────────────┐
-│ Node local stack │ │ Supabase hosted  │ │ XAMPP fallback           │
-│ `server/`        │ │ `supabase/`      │ │ `xampp/api/index.php`    │
-│ Express+Socket.IO│ │ Auth+Postgres+   │ │ PHP+MySQL                │
-│ MariaDB          │ │ Storage+Functions│ │                          │
-└───────┬──────────┘ └────────┬─────────┘ └────────────┬─────────────┘
-        │                     │                          │
-        ▼                     ▼                          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ Persistent scans, assets, body models, measurements, orders, etc.   │
-│ `xampp/database/sukatai.sql` / `supabase/migrations/`               │
-└───────────────────────┬─────────────────────────────────────────────┘
-                        │ optional provider request
-                        ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ Image measurement service: FastAPI → pipeline → GLB/measurements    │
-│ `ai-service/app/main.py` → `ai-service/app/pipeline.py`             │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Client (React SPA)                        │
+├──────────────────┬──────────────────┬───────────────────────┤
+│   App.tsx (UI)   │  lib/*.ts (domain│   three.js 3D viewer  │
+│  `src/App.tsx`   │  + API clients)  │   (model preview)     │
+│                  │  `src/lib/`      │                       │
+└────────┬─────────┴────────┬─────────┴──────────┬────────────┘
+         │  HTTP/Socket.IO   │  fetch (PHP)       │
+         ▼                   ▼                    ▼
+┌───────────────────────────┐   ┌───────────────────────────┐
+│  Node backend (Express)   │   │  XAMPP backend (PHP/PDO)   │
+│  `server/index.mjs`       │   │  `xampp/api/index.php`     │
+│  auth, scans, orders,     │   │  parallel action-router    │
+│  Socket.IO status stream  │   │  mirror of Node API        │
+└────────────┬──────────────┘   └─────────────┬─────────────┘
+             │  MariaDB                        │  MariaDB
+             ▼                                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       MariaDB database                       │
+│         `server/database.mjs` / `xampp/database/`            │
+└─────────────────────────────────────────────────────────────┘
+             │  HTTP (multipart body-scan)
+             ▼
+┌─────────────────────────────────────────────────────────────┐
+│           AI service (FastAPI, Python 3.11)                  │
+│  `ai-service/app/main.py` → `app/pipeline.py`                │
+│  validation → reconstruction → measurement → GLB export      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Responsibilities
 
 | Component | Responsibility | File |
 |-----------|----------------|------|
-| React bootstrap | Redirects legacy local invitation callbacks and mounts the SPA. | `src/main.tsx` |
-| UI/workspace | Owns authentication screens, role-specific workspaces, scan capture/review, orders, and Three.js viewer. | `src/App.tsx` |
-| Browser runtime boundary | Selects Node/XAMPP/Supabase mode and exposes the configured Supabase client. | `src/lib/supabase.ts` |
-| Browser data boundary | Provides domain operations and delegates each operation to local API or Supabase. | `src/lib/data.ts` |
-| Browser asset boundary | Validates, uploads, deletes, and signs private scan/model assets. | `src/lib/storage.ts` |
-| Local Node API | Implements authentication, authorization, CRUD actions, asset serving, processing queue, delivery adapters, and Socket.IO. | `server/index.mjs` |
-| Local database access | Creates the MariaDB database/pool, applies `xampp/database/sukatai.sql`, and provides query/transaction helpers. | `server/database.mjs` |
-| Hosted backend | Defines schema/RLS and secure Deno Edge Functions for invites and scan processing. | `supabase/migrations/`, `supabase/functions/` |
-| AI service | Validates multipart images, reconstructs/calibrates a mesh, derives measurements, and exports GLB. | `ai-service/app/main.py`, `ai-service/app/pipeline.py` |
+| React SPA | Full UI: auth, dashboards, scan flow, 3D viewer | `src/App.tsx` |
+| Backend adapters | Runtime-agnostic API clients (Node/XAMPP/Supabase) | `src/lib/nodeApi.ts`, `src/lib/xampp.ts`, `src/lib/supabase.ts` |
+| Domain logic (client) | Scan flow state, order workflow, measurement mapping, truth resolution | `src/lib/scanFlow.ts`, `src/lib/orderWorkflow.ts`, `src/lib/measurementMapping.ts`, `src/lib/scanResultTruth.ts` |
+| Node backend | Express action-router API, auth, sessions, scan processing queue, Socket.IO | `server/index.mjs` |
+| Node DB layer | MariaDB pool, transactions, schema init | `server/database.mjs`, `server/setup-db.mjs` |
+| Node AI bridge | Forwards scan assets to FastAPI, normalizes results | `server/aiService.mjs` |
+| PHP backend | Parallel XAMPP-hosted API mirroring the Node contract | `xampp/api/index.php` |
+| AI service API | FastAPI endpoints for body-scan submit/status/model | `ai-service/app/main.py` |
+| AI pipeline | Orchestrates validation → reconstruction → measurement → export | `ai-service/app/pipeline.py` |
 
 ## Pattern Overview
 
-**Overall:** Single-page frontend with a runtime-selectable backend adapter and parallel local/hosted persistence implementations.
+**Overall:** Multi-runtime action-router backend + client-side domain layer + dedicated Python AI microservice.
 
 **Key Characteristics:**
-
-- Keep browser workflow code runtime-neutral: `src/lib/data.ts`, `src/lib/storage.ts`, and `src/lib/auth.ts` branch only at the persistence/auth boundary using `isLocalApiMode` from `src/lib/supabase.ts`.
-- Treat scan images and generated body models as private assets; serve them through signed URLs in Supabase or the authorization-checked `asset` action in `server/index.mjs`.
-- Keep privileged invitation and processing operations server-side in `supabase/functions/` or `server/index.mjs`; the browser invokes them through established adapters.
-- Preserve the shared domain model in `src/lib/types.ts` across React, local APIs, and Supabase table records.
+- Single-action dispatch API: clients POST an `action` name with a payload; both Node and PHP backends route it. Runtime chosen at build time via Vite `--mode` (`node`/`xampp`) and adapter selection in `src/lib/`.
+- The Python AI service is an isolated, replaceable reconstruction provider behind a stable `/api/v1/body-scan` HTTP contract.
+- Reconstruction providers are pluggable (`ai-service/app/reconstruction/` has silhouette/mesh-morpher/pixie/smplx adapters selected by config).
 
 ## Layers
 
-**Presentation and workflow layer:**
+**Presentation:**
+- Purpose: All UI and view state
+- Location: `src/App.tsx`, `src/styles.css`
+- Depends on: `src/lib/` domain + API modules
 
-- Purpose: Render the role-aware SPA and coordinate user interactions.
-- Location: `src/App.tsx`, `src/main.tsx`, `src/styles.css`.
-- Contains: Components, local React state, async loading hook, camera capture, scan navigation, and Three.js visualization.
-- Depends on: Domain types and helpers in `src/lib/`.
-- Used by: Vite web output and Capacitor mobile projects.
+**Client domain / adapters:**
+- Purpose: API access + business rules, abstracted over the active backend
+- Location: `src/lib/`
+- Used by: `src/App.tsx`
 
-**Browser domain adapter layer:**
+**Backend (dual runtime):**
+- Purpose: Persistence, auth, scan orchestration
+- Location: `server/` (Node) and `xampp/api/` (PHP) — parallel implementations of one contract
 
-- Purpose: Centralize auth, CRUD, storage, scan-state validation, processing requests, and live updates.
-- Location: `src/lib/`.
-- Contains: `data.ts`, `auth.ts`, `storage.ts`, `reconstructionProvider.ts`, `nodeApi.ts`, `xampp.ts`, `supabase.ts`, and pure helpers such as `scanFlow.ts`.
-- Depends on: Supabase JS or `fetch`/Socket.IO client, selected by `src/lib/supabase.ts`.
-- Used by: `src/App.tsx` and tests in `tests/`.
-
-**Local Node application layer:**
-
-- Purpose: Primary local full-stack runtime with API, session auth, scan queue, external notification delivery, and static SPA hosting.
-- Location: `server/index.mjs`.
-- Contains: A query-parameter action dispatcher, middleware, role checks, asset authorization, a serialized in-process queue, and Socket.IO rooms.
-- Depends on: MariaDB helpers in `server/database.mjs`, configuration in `server/config.mjs`, optional AI client in `server/aiService.mjs`, and built assets in `dist-node/`.
-- Used by: `src/lib/nodeApi.ts` and `src/lib/xampp.ts` when Node mode is selected.
-
-**Hosted Supabase layer:**
-
-- Purpose: Provide Auth, PostgreSQL data/RLS, private object storage, and privileged server-side functions.
-- Location: `supabase/migrations/`, `supabase/functions/`.
-- Contains: Tables, enum types, triggers, RLS/storage policies, and Deno handlers for invitation lifecycle and processing.
-- Depends on: Supabase Auth and service-role client constructed in `supabase/functions/_shared/auth.ts`.
-- Used by: Direct Supabase browser calls in `src/lib/` and function invokes from `src/lib/auth.ts`/`src/lib/reconstructionProvider.ts`.
-
-**AI reconstruction layer:**
-
-- Purpose: Optional image-to-measurement service for the Node gateway and compatible Supabase processing endpoint.
-- Location: `ai-service/app/`.
-- Contains: FastAPI endpoints, request/response schemas, image validation, calibrated silhouette reconstruction, optional model adapters, calibration, tailoring measurement calculation, and GLB exporter.
-- Depends on: Settings in `ai-service/app/core/config.py` and image/model libraries.
-- Used by: `server/aiService.mjs` and the multipart request path in `supabase/functions/process-scan/index.ts`.
+**AI microservice:**
+- Purpose: Image validation, 3D reconstruction, anthropometric measurement, GLB export
+- Location: `ai-service/app/`
 
 ## Data Flow
 
-### Primary Scan Request Path
+### Primary Scan Path
 
-1. `CustomerScan` creates/updates a scan and uploads front, side, and back assets through `src/App.tsx:995`, `src/lib/data.ts`, and `src/lib/storage.ts`.
-2. The selected backend persists the scan/asset records: `server/index.mjs:899` with MariaDB, or the tables/storage policies defined in `supabase/migrations/20260829000000_sukatai_schema.sql`.
-3. `requestScanProcessing` invokes `process_scan` locally or `process-scan` remotely through `src/lib/reconstructionProvider.ts`.
-4. Node serializes work in `processScanJob` and `queueScanProcessing` (`server/index.mjs:755`, `server/index.mjs:873`); Supabase performs the equivalent authenticated transaction in `supabase/functions/process-scan/index.ts`.
-5. When configured, `server/aiService.mjs:187` posts multipart views to `ai-service/app/main.py:137`; `BodyScanPipeline.process` validates, reconstructs, calibrates, measures, and exports at `ai-service/app/pipeline.py:99`.
-6. The backend writes measurements/body model and updates the scan to `ready_for_review`; Node emits a room-scoped `scan:status` event from `server/index.mjs` and `ScanProcessing` subscribes via `src/lib/nodeApi.ts`.
-7. `ScanResults` loads the bundle and uses private signed/authorized asset URLs for photos and body-model display in `src/App.tsx:1364`.
-
-### Invitation Path
-
-1. An administrator submits an invitation through `src/lib/auth.ts`.
-2. In Supabase mode, `supabase/functions/invite-dressmaker/index.ts` checks the bearer user, administrator role, allowed redirect origin, and creates a hashed one-time invitation before invoking Supabase Auth.
-3. `supabase/functions/accept-dressmaker-invitation/index.ts` validates the token or server-owned metadata, atomically claims it, and upserts the dressmaker profile/organization assignment.
-4. In Node/XAMPP modes, the same UI calls their local action through `src/lib/xampp.ts`; Node dispatches optional email via `server/index.mjs`.
+1. Customer completes scan steps in UI (`src/lib/scanFlow.ts` step machine, `src/App.tsx`)
+2. Assets + height uploaded via active adapter (`src/lib/nodeApi.ts` or `src/lib/xampp.ts`)
+3. Backend stages a processing attempt and forwards to AI (`server/index.mjs`, `server/scanProcessingAttempt.mjs`, `server/aiService.mjs`)
+4. AI service runs the pipeline (`ai-service/app/pipeline.py:367` `process()`): validate views → pose → reconstruct mesh → tailoring measurements → `export_glb`
+5. Status streamed back to client via Socket.IO (`server/index.mjs`) or polled (`src/lib/reconstructionProvider.ts`)
+6. Client resolves the truthful scan state (`src/lib/scanResultTruth.ts`) and renders measurements + 3D model
 
 **State Management:**
+- Server-authoritative scan status; client polls/subscribes. Node keeps an in-memory processing queue and periodic recovery timer (`server/index.mjs`).
 
-- Persist authoritative business state in the active backend; React state only represents current page/workflow state in `src/App.tsx`.
-- Model scan lifecycle as the `ScanStatus` union in `src/lib/types.ts` and enforce state/role transitions in server-side logic and Supabase triggers/policies.
-- Node owns module-level process state only for the live Socket.IO server and in-process processing queue in `server/index.mjs`; the AI service separately keeps completed results in the in-memory `stored_scans` dictionary in `ai-service/app/main.py`.
+### Auth Flow
+
+1. Sign-in/up action to backend (`src/lib/auth.ts` → `server/index.mjs`)
+2. Rate-limited (`rateLimitedActions` in `server/index.mjs`), bcrypt password hashing
+3. Session cookie `sukatai_node`; email OTP via nodemailer (Node) / PHPMailer (`xampp/api/mailer.php`)
 
 ## Key Abstractions
 
-**Runtime mode selection:**
+**Backend adapter:**
+- Purpose: Decouple UI from the active runtime
+- Examples: `src/lib/nodeApi.ts`, `src/lib/xampp.ts`, `src/lib/supabase.ts`
+- Pattern: Uniform `request(action, options)` returning typed results
 
-- Purpose: Allow one React codebase to run against Node, XAMPP, or Supabase.
-- Examples: `src/lib/supabase.ts`, `src/lib/nodeApi.ts`, `src/lib/xampp.ts`.
-- Pattern: Determine mode once from Vite build environment, then route local requests through `xamppRequest` (which delegates to Node when appropriate) or use `requireSupabase()`.
+**Reconstruction provider:**
+- Purpose: Swappable 3D reconstruction backend
+- Examples: `ai-service/app/reconstruction/silhouette.py`, `mesh_morpher.py`, `pixie_adapter.py`, `smplx_adapter.py`, base `reconstruction/base.py`
+- Pattern: Common interface selected by `ai-service/app/core/config.py`
 
-**Scan bundle:**
-
-- Purpose: Aggregate a scan with its images, measurements, and optional body model for review.
-- Examples: `src/lib/types.ts`, `src/lib/data.ts`.
-- Pattern: Fetch independently persisted artifacts and return the `ScanBundle` interface to presentation code.
-
-**Processing provider boundary:**
-
-- Purpose: Isolate an optional reconstruction provider from persistent scan workflow.
-- Examples: `server/aiService.mjs`, `supabase/functions/process-scan/index.ts`, `ai-service/app/pipeline.py`.
-- Pattern: Validate provider output before persisting any measurements or model reference; retain a clearly labelled local deterministic fallback for local development.
+**Scan truth resolver:**
+- Purpose: Derive one truthful UI state from ambiguous backend payloads
+- Examples: `src/lib/scanResultTruth.ts`, `src/lib/reconstructionProvider.ts`
 
 ## Entry Points
 
-**Web application:**
+**Web SPA:**
+- Location: `src/main.tsx` → `src/App.tsx`; HTML shell `index.html`; bundler `vite.config.ts`
+- Triggers: Browser load
 
-- Location: `src/main.tsx`.
-- Triggers: Vite serves `index.html`, then React mounts into `#root`.
-- Responsibilities: Redirect legacy local auth callbacks and render `App` under `StrictMode`.
-
-**Node server:**
-
-- Location: `server/index.mjs`.
-- Triggers: `npm run start:node`.
-- Responsibilities: Initialize database, resume pending scans, start Express/Socket.IO, serve API/assets/dist output, and safely stop on process signals.
-
-**Supabase functions:**
-
-- Location: `supabase/functions/*/index.ts`.
-- Triggers: Browser function invokes.
-- Responsibilities: Authenticate bearer requests and perform privileged invitation or processing operations.
+**Node API server:**
+- Location: `server/index.mjs` (`npm run start:node`)
+- Triggers: HTTP requests + Socket.IO connections on port 3001
 
 **AI service:**
+- Location: `ai-service/app/main.py` (`npm run start:ai`, uvicorn port 8000)
+- Triggers: HTTP `/api/v1/body-scan` calls from backends
 
-- Location: `ai-service/app/main.py`.
-- Triggers: Uvicorn target `app.main:app`.
-- Responsibilities: Serve health/status routes and authenticated multipart body-scan requests.
+**PHP API:**
+- Location: `xampp/api/index.php`
+- Triggers: HTTP requests under XAMPP deployment
 
 ## Architectural Constraints
 
-- **Threading:** React runs in the browser event loop; Node uses an event loop with a serialized Promise processing queue in `server/index.mjs`; FastAPI uses async request handlers while CPU image work runs inside its process.
-- **Global state:** `server/index.mjs` holds `io`, `processingJobs`, and `processingQueue`; `ai-service/app/main.py` holds `settings`, `pipeline`, and `stored_scans`. Do not rely on either in-memory store for durable cross-process work.
-- **Runtime compatibility:** New browser data operations must support the selected backend mode or explicitly be scoped to a named mode. Keep the typed local and Supabase result shapes aligned with `src/lib/types.ts`.
-- **Asset access:** Do not expose raw private storage paths to unauthenticated callers. Use `src/lib/storage.ts`, the server asset handler, or authorized signed URLs.
+- **Threading:** Node single-threaded event loop with a serialized `processingQueue`; AI service uses async FastAPI with `asyncio.Semaphore(max_concurrent_scans)` (`ai-service/app/main.py`).
+- **Dual-runtime parity:** Any API contract change must be mirrored in both `server/index.mjs` and `xampp/api/index.php`, and env-mode flags kept aligned (`server/config.mjs` honors `SUKATAI_ENV`/`APP_ENV` like the PHP side).
+- **Global state:** In-memory maps in `server/index.mjs` (`processingJobs`, `rateLimitBuckets`) — single-instance only; multi-instance needs a shared store.
+- **Scan id safety:** IDs constrained by `SAFE_SCAN_ID` regex in `ai-service/app/pipeline.py` and path-traversal guards in `server/aiService.mjs`.
 
 ## Anti-Patterns
 
-### Bypassing the browser adapter boundary
+### Monolithic UI file
+**What happens:** `src/App.tsx` is ~3,294 lines holding nearly all views and state.
+**Why it's wrong:** Hard to navigate, test, and modify safely; high merge-conflict risk.
+**Do this instead:** Extract feature views/hooks into `src/` component modules; keep `App.tsx` as a router/shell.
 
-**What happens:** A component calls `fetch`, Supabase tables, or storage directly instead of using `src/lib/data.ts`, `src/lib/storage.ts`, or `src/lib/auth.ts`.
-**Why it's wrong:** It silently excludes one or more supported runtimes and duplicates mode/error behavior.
-**Do this instead:** Add the domain operation to the relevant `src/lib/` adapter with a local mode branch and Supabase implementation, then call that function from `src/App.tsx`.
-
-### Treating local reconstruction as personalized production output
-
-**What happens:** A consumer interprets the local deterministic result as a real reconstruction.
-**Why it's wrong:** The local processor is deliberately a simulation/reference path and does not produce personalized provider confidence.
-**Do this instead:** Preserve the provider-status and review workflow implemented in `server/index.mjs`, `supabase/functions/process-scan/index.ts`, and `src/lib/reconstructionProvider.ts`; only publish validated provider outputs as production measurements.
+### Duplicated backend contract
+**What happens:** Node (`server/index.mjs`) and PHP (`xampp/api/index.php`) reimplement the same action API.
+**Why it's wrong:** Behavior can drift between runtimes.
+**Do this instead:** Keep a shared contract test + document actions; change both in lockstep.
 
 ## Error Handling
 
-**Strategy:** Validate at boundaries, propagate user-readable errors to React, and keep privileged/internal failures server-side.
+**Strategy:** Typed error classes with stable codes/status. `ApiError` in `server/index.mjs`, `PipelineFailure` in `ai-service/app/pipeline.py`, `SukatApiException` in `xampp/api/index.php`.
 
 **Patterns:**
-
-- Browser adapters turn backend failures into `Error` objects using `readableError` in `src/lib/supabase.ts`.
-- Node uses `ApiError` plus centralized `sendError` in `server/index.mjs`; production hides unanticipated internal error details.
-- Supabase functions use status-specific JSON responses through `supabase/functions/_shared/cors.ts`.
-- AI pipeline failures carry stable error codes, HTTP statuses, and validation issues through `PipelineFailure` in `ai-service/app/pipeline.py`.
+- User-safe messages surfaced; internal detail suppressed in production
+- Pipeline returns structured `ValidationIssue[]` for image/pose problems
 
 ## Cross-Cutting Concerns
 
-**Logging:** Node logs unexpected server errors through `sendError` in `server/index.mjs`; the AI service exposes health/status diagnostics in `ai-service/app/main.py`.
-
-**Validation:** Browser preflight guards live in `src/lib/scanFlow.ts`; server checks include image signatures and role/state checks in `server/index.mjs`; hosted processing validates provider payloads in `supabase/functions/process-scan/index.ts`; AI validation is in `ai-service/app/validation/image_validator.py`.
-
-**Authentication:** Supabase mode uses `@supabase/supabase-js` session auth in `src/lib/auth.ts` and RLS policies in `supabase/migrations/`; Node uses database-backed cookie sessions in `server/index.mjs`; XAMPP supplies its own PHP session implementation in `xampp/api/index.php`.
+**Logging:** Diagnostic outputs written under `ai-service/output/diagnostic/`; console-based server logging.
+**Validation:** Image + pose validators (`ai-service/app/validation/`), Pydantic schemas (`ai-service/app/schemas/api.py`), input coercion helpers in both backends.
+**Authentication:** Cookie sessions + bcrypt + email OTP, rate-limited in both runtimes.
 
 ---
 
-*Architecture analysis: 2026-09-01*
+*Architecture analysis: 2026-09-25*

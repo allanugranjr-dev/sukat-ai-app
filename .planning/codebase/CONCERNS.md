@@ -1,175 +1,140 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-09-01
+**Analysis Date:** 2026-09-25
 
 ## Tech Debt
 
-**Three independently maintained backend implementations:**
-- Issue: The same domain actions and access rules exist in Supabase Edge Functions/RLS, the Node/MariaDB API, and the XAMPP/PHP API. The frontend switches among them in `src/lib/data.ts`, `src/lib/auth.ts`, and `src/lib/storage.ts`.
-- Files: `src/lib/data.ts`, `src/lib/auth.ts`, `src/lib/storage.ts`, `server/index.mjs`, `xampp/api/index.php`, `supabase/functions/process-scan/index.ts`, `supabase/migrations/20260829000000_sukatai_schema.sql`
-- Impact: A feature or security correction can be implemented in one runtime and omitted from the others; review burden and behavior drift rise with every role, invitation, scan, and storage change.
-- Fix approach: Select one production backend contract as authoritative. If local adapters remain required, define shared contract tests and keep backend-specific code behind a narrow adapter interface rather than duplicating business workflows.
+**Monolithic frontend component (`src/App.tsx`):**
+- Issue: The entire React app lives in a single 3,294-line file — auth screens, profile, scan flow, order/dressmaker views, and many inline sub-components (`Field`, reset/OTP forms) are all co-located.
+- Files: `src/App.tsx`
+- Impact: Hard to navigate, review, and test in isolation; merge-conflict prone; no component-level reuse boundaries.
+- Fix approach: Split into `src/features/{auth,scan,orders,profile}/` and `src/components/` modules; extract shared inputs (`Field`, verification-code input) into reusable components.
 
-**Monolithic UI and API dispatch modules:**
-- Issue: `src/App.tsx` contains navigation, scan capture, camera lifecycle, 3D presentation, dashboards, forms, and role workflows in 2,676 lines. `server/index.mjs` combines HTTP middleware, authentication, authorization, data access, notifications, processing orchestration, Socket.IO, and all action dispatch in 1,487 lines. `xampp/api/index.php` repeats the same concentration in 1,271 lines.
-- Files: `src/App.tsx`, `server/index.mjs`, `xampp/api/index.php`
-- Impact: Small modifications have a broad regression surface, merge conflicts are likely, and unit testing internal workflows is difficult.
-- Fix approach: Extract route/action handlers, domain services, and repository modules from `server/index.mjs`; split UI screens and hooks from `src/App.tsx`; avoid adding new actions to the PHP monolith.
+**Monolithic Node API (`server/index.mjs`):**
+- Issue: A single 1,939-line / 102 KB file implements the entire action-dispatch API (auth, sessions, scans, orders, fittings, admin, assets) plus the rate limiter and route table.
+- Files: `server/index.mjs` (action sets defined at lines ~72, ~116)
+- Impact: Difficult to reason about authorization per action; high blast radius for any change; no per-domain module boundaries.
+- Fix approach: Extract handlers into `server/handlers/*.mjs` grouped by domain, keep `index.mjs` as thin dispatcher.
 
-**Schema is applied opportunistically on server startup:**
-- Issue: The Node service executes the complete XAMPP SQL schema and imperative `ALTER TABLE`/`CREATE TABLE` statements at startup.
-- Files: `server/database.mjs`, `xampp/database/sukatai.sql`, `server/setup-db.mjs`
-- Impact: Deploy startup requires DDL permissions, schema changes are not versioned as a linear migration history, and a multi-instance deployment can race during initialization.
-- Fix approach: Move MariaDB evolution to ordered, idempotent migration files executed by a deploy-time migration command. Keep `initializeDatabase()` limited to opening an already-migrated pool.
+**Dual backend duplication (Node + PHP):**
+- Issue: The same API surface is implemented twice — `server/index.mjs` and `xampp/api/index.php` (see duplicated fittings query at `server/index.mjs:1516` vs `xampp/api/index.php:1221`).
+- Files: `server/index.mjs`, `xampp/api/index.php`
+- Impact: Every feature/bugfix must be applied in two languages; high risk of behavioral drift between runtimes.
+- Fix approach: Treat one runtime as canonical and generate/mirror the other, or consolidate on a single deployment target; add cross-runtime contract tests (partially covered by `tests/adapters.contract.test.ts`).
 
-**Placeholder reconstruction is a product-critical fallback:**
-- Issue: The default `auto` mode deliberately selects calibrated silhouettes, and the fallback shape incorporates fixed reference-body priors. The implementation labels the result, but it still produces measurement values and a GLB.
-- Files: `ai-service/app/pipeline.py`, `ai-service/app/reconstruction/silhouette.py`, `ai-service/app/measurements/tailoring.py`, `docs/body-measurement-pipeline-plan.md`
-- Impact: Measurements can be inaccurate for bodies, poses, lighting, or backgrounds that differ from the heuristic assumptions; result quality is not empirically calibrated in the codebase.
-- Fix approach: Gate measurement publication on a validated learned provider or an explicit demo-only feature flag. Record validation evidence, provider/model versions, and calibration error bounds before treating output as production measurement data.
+**Large silhouette module (`ai-service/app/reconstruction/silhouette.py`):**
+- Issue: 728-line module carrying image segmentation, profile extraction, and geometric heuristics together.
+- Files: `ai-service/app/reconstruction/silhouette.py`, `ai-service/app/pipeline.py` (567 lines)
+- Impact: Hard to unit-test individual heuristics; changes to one stage risk others.
+- Fix approach: Separate segmentation, profile geometry, and measurement extraction into distinct modules.
 
 ## Known Bugs
 
-**AI-service result APIs lose completed scan metadata after a restart or across workers:**
-- Symptoms: A scan may finish and write a GLB to disk, but `GET /api/v1/body-scan/{scan_id}`, `/status`, `/measurements`, and `/model-file` return 404 after the service restarts or requests reach a different worker.
-- Files: `ai-service/app/main.py`
-- Trigger: Process a scan, then restart the Python service or run it with multiple independent workers.
-- Workaround: Keep a single process alive; no durable lookup exists in this service.
-
-**Scan-asset deletion can leave the database and storage out of sync:**
-- Symptoms: When object deletion succeeds but deleting the corresponding `scan_assets` row fails, the database continues to reference a non-existent object. The inverse failure leaves an undeleted object when storage removal fails.
-- Files: `src/lib/storage.ts`
-- Trigger: Delete an asset while the second network operation fails or authorization changes between the two operations.
-- Workaround: Retry manually; there is no reconciliation job.
-
-**Supabase processing failure deletes prior outputs before replacement is durable:**
-- Symptoms: A transient provider, storage, or database failure removes existing measurements and body-model rows, then marks the scan failed.
-- Files: `supabase/functions/process-scan/index.ts`
-- Trigger: Reprocess an existing scan and cause an error after the deletes at `supabase/functions/process-scan/index.ts:364` and `supabase/functions/process-scan/index.ts:366` but before the final scan update.
-- Workaround: Reprocess the scan; previously reviewed results are not retained as a versioned fallback.
+None confirmed by static inspection. Behavior is guarded by an extensive test suite (see Test Coverage Gaps). Runtime bugs were not reproduced during this analysis.
 
 ## Security Considerations
 
-**Python reconstruction service can be unintentionally unauthenticated:**
-- Risk: `_authorized()` allows every protected endpoint whenever `AI_SERVICE_API_KEY` is unset. The service binds to all interfaces when launched directly, and processing endpoints accept image uploads and return personalized measurements/models.
-- Files: `ai-service/app/main.py`, `ai-service/app/core/config.py`, `ai-service/README.md`
-- Current mitigation: An API key is enforced when configured; scan IDs are constrained and uploads are size-limited.
-- Recommendations: Fail closed outside an explicitly local development mode when the key is missing. Put the service behind private networking/authentication, and add a startup check that rejects public binding without an authentication configuration.
+**Tracked mobile env file:**
+- Risk: `.env.mobile` is intentionally un-ignored (`!.env.mobile` in `.gitignore`) and committed. If it ever gains a real endpoint/secret it would be exposed in git history.
+- Files: `.gitignore`, `.env.mobile`
+- Current mitigation: Real secret env files (`.env`, `.env.local`, `.env.node.local`, `.env.xampp.local`) are correctly gitignored; only `.env.example`, `ai-service/.env.example`, and `.env.mobile` are tracked.
+- Recommendations: Confirm `.env.mobile` contains only non-secret public config; add a CI check that fails if tracked env files contain secret-like keys.
 
-**Node cookie sessions have no explicit CSRF defense for cross-site cookie configurations:**
-- Risk: Mutating Node endpoints authenticate only with the session cookie. The default `SameSite=Lax` reduces exposure, but `SUKATAI_COOKIE_SAMESITE=None` enables cross-site cookies without a CSRF token or strict Origin/Referer verification on state-changing requests.
-- Files: `server/config.mjs`, `server/index.mjs`, `src/lib/nodeApi.ts`
-- Current mitigation: An allowlist-based CORS response is set in `server/index.mjs`; cookies are `HttpOnly` and default to `Lax`.
-- Recommendations: Keep `SameSite=Lax` unless cross-site deployment is required. For `None`, require a synchronizer/double-submit CSRF token and validate Origin on all mutating API actions, including multipart uploads.
+**In-memory authentication rate limiter:**
+- Risk: `authRateLimit` uses a process-local `Map` (`server/index.mjs:47-70`). It resets on restart and is not shared across processes/instances, so horizontal scaling or a restart loop defeats brute-force protection.
+- Files: `server/index.mjs:41-116`
+- Current mitigation: 10 attempts / 15 min window on `sign_in`, `sign_up`, OTP, and password-reset actions; trusted-proxy handling documented in `server/config.mjs`.
+- Recommendations: Back the limiter with a shared store (DB/Redis) for multi-instance deployments; verify `SUKATAI_TRUST_PROXY` is set correctly so limits key on the real client IP, not a rotatable header.
 
-**No request throttling on credential and expensive processing endpoints:**
-- Risk: `sign_in`, `sign_up`, password-reset/update paths, invitation workflows, image upload, and scan processing have no rate limiter or quota. An attacker can exhaust bcrypt, storage, provider, and notification resources or enumerate operational behavior.
-- Files: `server/index.mjs`, `xampp/api/index.php`, `ai-service/app/main.py`, `supabase/functions/invite-dressmaker/index.ts`, `supabase/functions/process-scan/index.ts`
-- Current mitigation: Node upload size is capped at 10 MB in `server/index.mjs`; the AI service checks upload size and image dimensions in `ai-service/app/validation/image_validator.py`.
-- Recommendations: Apply identity/IP-aware rate limits, per-user scan quotas, bounded concurrent jobs, and provider/notification circuit breakers at the edge and in each backend.
+**CORS allowlist must be constrained in production:**
+- Risk: Credentialed CORS allowlist configuration warns it must be limited in production (`server/config.mjs:34`); a misconfigured wildcard with credentials would be exploitable.
+- Files: `server/config.mjs`
+- Current mitigation: Cookie `Secure`/`SameSite` and session-hours config are env-driven (`server/config.mjs:76,109-118`).
+- Recommendations: Enforce a non-empty explicit allowlist in production mode; fail startup if credentials are enabled with a wildcard origin.
+
+**No secret leakage in scan attempt logs:**
+- Note (positive): `server/scanProcessingAttempt.mjs:16-17` redacts bearer tokens and `api_key/secret/password/token` patterns from stored attempt data. Keep this filter in sync with new fields.
+
+**SQL access uses parameterized queries:**
+- Note (positive): PHP uses PDO prepared statements with `ATTR_EMULATE_PREPARES => false` (`xampp/api/index.php:134`); Node builds `IN (...)` clauses with bound placeholders (`server/index.mjs:1516`). No string-interpolated SQL observed.
 
 ## Performance Bottlenecks
 
-**Node scan processing is intentionally serialized in one in-process promise chain:**
-- Problem: Every queued Node scan waits for all earlier scans, including provider calls and model downloads.
-- Files: `server/index.mjs`, `server/aiService.mjs`
-- Cause: `processingQueue` chains each job behind the previous one at `server/index.mjs:873`; a process restart loses queue state.
-- Improvement path: Use a durable job queue with bounded worker concurrency and idempotent job records. Preserve the short database commit serialization separately if needed, rather than serializing network and CPU work.
-
-**Browser scan lists fan out into one request group per historical scan:**
-- Problem: Fetching all customer measurement sets issues one `getScanBundle()` request group per scan, each performing four Supabase queries.
-- Files: `src/lib/data.ts`
-- Cause: `listCustomerMeasurementSets()` calls `Promise.all(scans.map((scan) => getScanBundle(scan.id)))` at `src/lib/data.ts:121`.
-- Improvement path: Add a paginated backend query/RPC that returns only the dashboard summary fields, then load a single bundle only when the user opens a scan.
-
-**CPU-heavy reconstruction runs synchronously inside async request handlers:**
-- Problem: The FastAPI request handler calls `pipeline.process()` directly, including image decoding, OpenCV/rembg work, mesh construction, and GLB export.
-- Files: `ai-service/app/main.py`, `ai-service/app/pipeline.py`, `ai-service/app/reconstruction/silhouette.py`
-- Cause: `create_body_scan()` calls the synchronous pipeline at `ai-service/app/main.py:168`; CPU-bound work blocks the worker handling the request.
-- Improvement path: Submit work to a bounded background worker/queue, persist status durably, and return a job identifier. Enforce CPU/memory limits and isolate native image/model processing in worker processes.
+**CPU-only heuristic reconstruction pipeline:**
+- Problem: Segmentation (rembg `u2net_human_seg`) plus per-row silhouette scanning runs on CPU; the pipeline is process-bound and synchronous per scan.
+- Files: `ai-service/app/reconstruction/silhouette.py`, `ai-service/app/pipeline.py`
+- Cause: No GPU path enabled by default; neural reconstruction assets (PIXIE/SMPL-X) are not installed, so the heuristic path is the production path.
+- Improvement path: Confirm resource bounds (there is `ai-service/tests/test_resource_bounds.py`), consider batching/queueing scans and caching the rembg session (already lazy-loaded with a lock at `silhouette.py:18-19`).
 
 ## Fragile Areas
 
-**Supabase scan-processing state transition spans non-transactional remote side effects:**
-- Files: `supabase/functions/process-scan/index.ts`, `supabase/migrations/20260901000000_harden_scan_processing_and_storage.sql`
-- Why fragile: The function transitions status, creates signed URLs, calls a provider, downloads/uploads a model, deletes old rows, upserts results, and updates final state through separate operations. Partial failure cleanup can itself fail, leaving a misleading state or losing prior results.
-- Safe modification: Keep the compare-and-set scan status guards, add explicit processing attempt/version records, write new artifacts under an attempt ID, then atomically promote the attempt after all data is present.
-- Test coverage: No automated tests execute Edge Functions against Supabase storage, RLS, provider timeouts, retries, or partial-failure cleanup.
+**Measurement accuracy depends on hand-tuned anatomical fractions:**
+- Files: `ai-service/app/measurements/tailoring.py` (e.g. `head_circumference` factor 0.94 at line 114; `neck_to_pelvis = (0.835 - 0.432) * height_cm` at line 146; foot ratios at lines 153-154), `ai-service/app/measurements/calibration.py`
+- Why fragile: Comment at `tailoring.py:116` states fractions are "tuned to match SnapMeasureAI anatomy benchmarks." These are empirical constants, not derived from the reconstructed geometry; small changes shift every downstream measurement, and results are calibrated to a reference target (see memory note on calibration annealing making the 170 cm demo match SnapMeasureAI).
+- Safe modification: Change one fraction at a time and re-run `ai-service/tests/test_measurement_normalization.py` and `test_silhouette_pipeline.py`; document the empirical basis of any new constant.
+- Test coverage: Covered by calibration/normalization tests, but tests likely lock in the tuned constants rather than validate real-world accuracy.
 
-**Local backend compatibility relies on frontend mode switches:**
-- Files: `src/lib/supabase.ts`, `src/lib/nodeApi.ts`, `src/lib/xampp.ts`, `server/index.mjs`, `xampp/api/index.php`
-- Why fragile: API shape and authorization semantics are manually kept compatible. Node additionally provides Socket.IO status updates, while the XAMPP implementation does not, so behavior is mode-dependent.
-- Safe modification: Add a backend contract suite that runs the same auth, scan, invitation, asset, order, and processing scenarios against each supported mode. Deprecate modes that cannot meet the same privacy and lifecycle guarantees.
-- Test coverage: Existing frontend tests only cover pure helpers and one Node provider-response normalizer; there are no Node/PHP HTTP integration tests.
+**Reconstruction backend is heuristic, not the advertised neural model:**
+- Files: `ai-service/app/reconstruction/pixie_adapter.py`, `smplx_adapter.py`, `silhouette.py` (`source = "heuristic"` at line 36)
+- Why fragile: `PixieAdapter.reconstruct` raises `ModelAssetError`/`ReconstructionError` unless checkpoints AND a configured runner exist (lines 36-42); `SmplxAdapter.mesh_from_parameters` requires `torch`+`smplx` and model assets (lines 24-30). With assets absent, the system falls back to the 2D silhouette heuristic. Accuracy claims implicitly depend on assets that are not committed (`ai-service/models/*` is gitignored).
+- Safe modification: Keep the adapter boundary intact; do not remove the `readiness()` guards. Document clearly which backend is active per deployment.
+- Test coverage: Adapter contract behavior is tested (`tests/adapters.contract.test.ts`), but end-to-end neural accuracy cannot be tested without assets.
 
-**AI-service process-local state and disk artifacts are coupled:**
-- Files: `ai-service/app/main.py`, `ai-service/app/pipeline.py`, `ai-service/app/reconstruction/mesh_exporter.py`
-- Why fragile: `stored_scans` is memory-only while GLBs are written to local output storage. Result lookup requires both the in-memory entry and the file, so lifecycle, cleanup, and horizontal scaling are undefined.
-- Safe modification: Persist scan metadata, artifact path, and lifecycle state in the system database/object store; load by scan ID rather than retaining an unbounded process dictionary.
-- Test coverage: `ai-service/tests/test_api.py` tests one single-process happy path only.
+**Gender macro semantics are inverted vs. upstream:**
+- Files: `ai-service/app/fitting/anny_fitter.py`, `ai-service/app/reconstruction/mesh_morpher.py`
+- Why fragile: Per memory note, Anny's gender macro is reversed (`gender=0.0` is MALE, `1.0` is FEMALE — opposite of MakeHuman). Any refactor that "corrects" this to match MakeHuman conventions will silently swap results.
+- Safe modification: Preserve and comment the inversion explicitly at the mapping site; add a regression test asserting male/female mesh outputs.
 
 ## Scaling Limits
 
-**Single-host local storage and local database assumptions:**
-- Current capacity: Node writes scan images and body models under `xampp/storage`; the Python service writes GLBs under `ai-service/output`; MariaDB defaults to a local host and a 10-connection pool.
-- Limit: Multiple Node/Python replicas cannot reliably share files, in-memory queues, or the Python result index; local disks and uploads have no retention/lifecycle enforcement.
-- Scaling path: Move private assets to shared object storage, persist job/result state centrally, use a durable queue, and introduce retention/deletion jobs compatible with privacy requirements.
+**Single-process Node server state:**
+- Current capacity: Rate-limit buckets and any in-memory state live in one process (`server/index.mjs`).
+- Limit: Breaks correctness under multiple instances / load balancing.
+- Scaling path: Externalize rate limiting and ensure sessions (already DB-backed via `sessions` table, `server/database.mjs:176`) remain the only shared state.
 
-**Processing concurrency is effectively one Node scan per process:**
-- Current capacity: `server/index.mjs` processes Node scan jobs through one serialized `processingQueue`.
-- Limit: Queue latency grows linearly with slow providers and model downloads; restart recovery is limited to scanning pending database status without durable job attempts.
-- Scaling path: Use a queue service with explicit concurrency, backoff, dead-letter handling, idempotency keys, and metrics for queue age and provider latency.
+**Local filesystem scan storage:**
+- Current capacity: Scan captures and body models are stored under `xampp/storage/` on local disk (gitignored except `.htaccess`).
+- Limit: Not shareable across hosts; grows unbounded with scans.
+- Scaling path: Move to object storage (S3-compatible) with lifecycle/retention policy.
 
 ## Dependencies at Risk
 
-**Floating frontend dependency versions:**
-- Risk: Several runtime and development dependencies use the `latest` tag rather than a fixed version range.
-- Impact: A fresh install can receive an unreviewed React, Vite, Supabase, TypeScript, or testing-tool release and fail builds or change behavior.
-- Migration plan: Pin tested semver ranges in `package.json`, retain `package-lock.json`, and use automated dependency updates with CI validation.
-- Files: `package.json`, `package-lock.json`
+**Floating `latest` versions in `package.json`:**
+- Risk: `react`, `react-dom`, `@vitejs/plugin-react`, `typescript`, `vite`, `vitest`, `@types/react`, `@types/react-dom` are pinned to `"latest"` (`package.json:27,34-35,42-46`).
+- Impact: Non-reproducible installs; a breaking upstream release can break builds without a code change. Contradicts the project convention of pinned dependency versions.
+- Migration plan: Pin to exact versions matching `package-lock.json`; rely on the lockfile and Dependabot/renovate for controlled upgrades.
 
-**Deprecated FastAPI TestClient dependency path:**
-- Risk: The Python test run emits a Starlette deprecation warning for the installed `httpx`/`TestClient` combination.
-- Impact: A future dependency update can break API tests or require migration under time pressure.
-- Migration plan: Update the testing stack to the supported `httpx` integration and resolve the warning before relying on future FastAPI/Starlette upgrades.
-- Files: `ai-service/tests/test_api.py`, `ai-service/requirements-dev.txt`, `ai-service/pyproject.toml`
+**Uninstalled neural model dependencies (PIXIE / SMPL-X / torch):**
+- Risk: The neural reconstruction path depends on packages and licensed checkpoints that are not vendored (`ai-service/models/*` gitignored; `smplx`/`torch` imported lazily).
+- Impact: Neural backend is unavailable out-of-the-box; deployments silently run the heuristic path.
+- Migration plan: Document required assets in `ai-service/MODEL_SETUP.md` (referenced by adapters) and add a startup readiness check that surfaces which backend is active.
 
 ## Missing Critical Features
 
-**Durable scan-processing and artifact lifecycle management:**
-- Problem: There is no shared job store, completion history, retry policy with attempt records, artifact retention schedule, or garbage collector for orphaned scan objects/models across `server/`, `ai-service/`, and Supabase storage.
-- Blocks: Reliable restarts, horizontal scaling, auditability of personalized-model generation, and predictable data-deletion compliance.
-
-**Production CI and deploy gates:**
-- Problem: No repository CI pipeline or browser/mobile end-to-end suite is detected; `package.json` only provides local Vitest/typecheck scripts, and Python tests are run manually.
-- Blocks: Consistent verification of the three backend modes, Supabase migrations/RLS policies, Capacitor builds, and security regressions before deployment.
+**Active reconstruction backend not surfaced to users/operators:**
+- Problem: There is no obvious runtime signal distinguishing "neural reconstruction" from "heuristic fallback"; measurements are labeled `calibrated`/`heuristic` internally but the distinction may not reach the UI.
+- Blocks: Operators can't tell whether accuracy claims hold for a given deployment; users may over-trust heuristic results.
 
 ## Test Coverage Gaps
 
-**Backend authorization, persistence, and HTTP behavior:**
-- What's not tested: Node session cookie handling, role boundaries, CORS/CSRF behavior, uploads, asset authorization, orders, invitation lifecycle endpoints, Socket.IO authorization, MariaDB schema initialization, and XAMPP/PHP endpoint behavior.
-- Files: `server/index.mjs`, `server/database.mjs`, `xampp/api/index.php`, `tests/aiService.test.mjs`
-- Risk: Backend modes can diverge or permit unintended actions without a failing test.
+**Frontend UI has no component/interaction tests:**
+- What's not tested: `src/App.tsx` (3,294 lines) — auth flows, OTP, scan UI, order/dressmaker interactions. Vitest suite covers only `src/lib/*` logic (`tests/*.test.ts`).
+- Files: `src/App.tsx`
+- Risk: UI regressions (form validation, state transitions, sharing flow) ship undetected.
 - Priority: High
 
-**Supabase RLS, migrations, Edge Functions, and storage policies:**
-- What's not tested: SQL migration application, RLS for every role, storage-path validation, signed URL access, invitation Edge Functions, processing transitions, and failure cleanup.
-- Files: `supabase/migrations/20260829000000_sukatai_schema.sql`, `supabase/migrations/20260901000000_harden_scan_processing_and_storage.sql`, `supabase/functions/process-scan/index.ts`, `supabase/functions/invite-dressmaker/index.ts`
-- Risk: The production persistence/security path can regress despite the frontend helper suite passing.
+**PHP backend has no automated tests:**
+- What's not tested: `xampp/api/index.php` (~1,200+ lines) — the entire PHP runtime path lacks a test harness, while the Node path has `tests/` and Python has `ai-service/tests/`.
+- Files: `xampp/api/index.php`, `xampp/api/mailer.php`
+- Risk: Behavioral drift from the Node backend goes unnoticed; auth/OTP/order logic untested in PHP.
 - Priority: High
 
-**User journeys and mobile behavior:**
-- What's not tested: Camera permissions/capture, upload retry/remove behavior, role dashboards, measurement review, invitation acceptance UI, native Android/iOS navigation, and accessibility of the large screen implementations.
-- Files: `src/App.tsx`, `src/lib/storage.ts`, `android/app/src/main/java/com/sukatai/app/MainActivity.java`, `ios/App/App/AppDelegate.swift`
-- Risk: Primary customer and staff workflows can break in a build that passes the 19 pure Vitest assertions.
-- Priority: High
-
-**AI reconstruction robustness and measurement validity:**
-- What's not tested: Corrupt/decompression-bomb images, concurrent processing, service restart recovery, model-download failures, fallback segmentation behavior, body/pose diversity, accuracy/error bounds, and provider response integration.
-- Files: `ai-service/app/main.py`, `ai-service/app/pipeline.py`, `ai-service/app/reconstruction/silhouette.py`, `ai-service/tests/test_api.py`
-- Risk: The service can produce unavailable, inconsistent, or inaccurate outputs without operational detection.
-- Priority: High
+**No end-to-end accuracy validation for measurements:**
+- What's not tested: Real-world measurement accuracy of the heuristic pipeline against ground truth; existing Python tests validate normalization/calibration mechanics, not correctness against measured humans.
+- Files: `ai-service/app/measurements/tailoring.py`, `ai-service/app/reconstruction/silhouette.py`
+- Risk: Tuned constants can pass tests while diverging from real measurements.
+- Priority: Medium
 
 ---
 
-*Concerns audit: 2026-09-01*
+*Concerns audit: 2026-09-25*

@@ -1,191 +1,152 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-09-01
+**Analysis Date:** 2026-09-25
+
+SukatAI has two independent test suites: **Vitest** for the SPA + Node gateway (JS/TS), and **pytest** for the Python AI service. The PHP/XAMPP runtime has no automated tests.
 
 ## Test Framework
 
-**Runner:**
-- Vitest `4.1.11` is used for root JavaScript/TypeScript tests. No dedicated Vitest config file is present; Vite defaults provide the test configuration.
-- pytest `8.4.2` is used for the Python AI service. Configuration is in `ai-service/pyproject.toml` with `testpaths = ["tests"]` and `addopts = "-ra"`.
+**JS/TS Runner:**
+- Vitest (`vitest` devDependency, `latest`). No dedicated `vitest.config.ts` — config comes from `vite.config.ts` plus `tsconfig.json` (`types: ["vitest/globals"]`, `include: ["tests", ...]`).
+- Globals enabled, but tests still import `{ describe, expect, it }` from `vitest` explicitly.
 
-**Assertion Library:**
-- Use Vitest's `expect` assertions imported from `vitest` in `tests/*.test.ts` and `tests/aiService.test.mjs`.
-- Use plain `assert`, `pytest.raises`, and `pytest.approx` in `ai-service/tests/*.py`.
+**Python Runner:**
+- pytest (`pytest>=8.3,<9` in `ai-service/requirements-dev.txt`).
+- Config in `ai-service/pyproject.toml`: `pythonpath = ["."]`, `testpaths = ["tests"]`, `addopts = "-ra"`.
+- `httpx` + FastAPI `TestClient` for API tests.
+
+**Assertion Libraries:**
+- JS/TS: Vitest `expect` (`toEqual`, `toBe`, `toMatchObject`, `toBeCloseTo`, `toBeNull`, `toThrow`).
+- Python: plain `assert` + pytest fixtures.
 
 **Run Commands:**
 ```bash
-npm test                                      # Run the four Vitest files at repository root
-npx vitest --watch                            # Watch Vitest tests (no package script is defined)
-npm run typecheck                             # Strict TypeScript validation for src/, tests/, and vite.config.ts
-cd ai-service && .\\.venv\\Scripts\\python.exe -m pytest  # Run the pytest suite on Windows
-cd ai-service && .\\.venv\\Scripts\\python.exe -m pytest -q # Compact pytest output
-```
+npm test                                   # Vitest run (SPA + Node): "vitest run"
+npx vitest                                 # Watch mode (not scripted)
+npx vitest run --coverage                  # Coverage (no threshold configured)
 
-`npm test` currently passes 4 files / 19 tests. The Python suite contains 7 tests under `ai-service/tests/`; its isolated calibration, image-validation, and silhouette tests pass through the documented pytest command.
+cd ai-service && pytest                     # Python AI service suite
+cd ai-service && pytest -ra tests/test_api.py
+```
+Note: `npm run lint` / `npm run typecheck` both run `tsc --noEmit` — type checking is part of the quality gate.
 
 ## Test File Organization
 
 **Location:**
-- Put frontend and Node boundary tests in the repository-level `tests/` directory, separate from production `src/` and `server/` files.
-- Put Python service tests in `ai-service/tests/`, separate from application code in `ai-service/app/`.
-- Exclude generated dependency tests under `ai-service/.venv/`; they are third-party packages, not project tests.
+- JS/TS: separate top-level `tests/` directory (NOT co-located with `src/`).
+- Python: separate `ai-service/tests/` directory mirroring `app/` domains.
 
 **Naming:**
-- Use `<subject>.test.ts` for TypeScript tests: `tests/scanFlow.test.ts`, `tests/measurementMapping.test.ts`, and `tests/invitationLifecycle.test.ts`.
-- Use `<subject>.test.mjs` when testing an ESM Node module: `tests/aiService.test.mjs`.
-- Use `test_<subject>.py` and `test_<behavior>` functions for pytest: `ai-service/tests/test_image_validation.py` and `test_validation_requires_front_and_side_and_height`.
+- JS/TS: `<subject>.test.ts` for SPA lib, `<subject>.test.mjs` for Node gateway — e.g. `tests/scanFlow.test.ts`, `tests/aiService.test.mjs`, `tests/scanProcessingTracer.test.mjs`.
+- Python: `test_<subject>.py` — `tests/test_api.py`, `tests/test_calibration.py`, `tests/test_silhouette_pipeline.py`.
 
 **Structure:**
 ```
-tests/
-├── aiService.test.mjs                 # Node provider-response boundary
-├── invitationLifecycle.test.ts         # Pure invitation-state rules
-├── measurementMapping.test.ts          # Pure measurement mapping and conversion rules
-└── scanFlow.test.ts                    # Pure scan-flow guardrails
+tests/                              # SPA + Node (Vitest)
+├── adapters.contract.test.ts       # cross-runtime adapter contract
+├── aiService.test.mjs              # Node AI provider boundary
+├── scanFlow.test.ts                # SPA scan guardrails
+├── measurementMapping.test.ts
+├── orderWorkflow.test.ts
+├── scanResultTruth.test.ts
+└── scanProcessingTracer.test.mjs   # Node durable-attempt contract
 
-ai-service/tests/
-├── conftest.py                         # Adds ai-service root to Python import path
-├── helpers.py                          # Reusable in-memory body-image fixture generator
-├── test_api.py                         # FastAPI endpoint integration
-├── test_calibration.py                 # Mesh-calibration unit tests
-├── test_image_validation.py            # Image validation unit tests
-└── test_silhouette_pipeline.py         # Pipeline/filesystem integration
+ai-service/tests/                   # Python (pytest)
+├── conftest.py                     # injects service root into sys.path
+├── helpers.py                      # image fixtures
+├── test_api.py
+├── test_calibration.py
+├── test_silhouette_pipeline.py     # exports build_settings / fitted_body_fixture reused elsewhere
+├── test_measurement_normalization.py
+├── test_resource_bounds.py
+└── test_mesh_morpher.py
 ```
 
 ## Test Structure
 
-**Suite Organization:**
+**Suite organization (Vitest):** one `describe` per behavior area, `it` clauses phrased as truthful behavioral guarantees.
 ```typescript
 import { describe, expect, it } from "vitest";
-import { previousScanPosition } from "../src/lib/scanFlow";
+import { customerScanJourney, isHeightValid, validateUpload } from "../src/lib/scanFlow";
 
 describe("scan flow guardrails", () => {
-  it("keeps Back inside the current scan journey", () => {
-    expect(previousScanPosition("capture", 2)).toEqual({ step: "capture", captureIndex: 1 });
+  it("only accepts supported, reasonably sized uploads", () => {
+    expect(validateUpload({ type: "image/jpeg", size: 1024 }).valid).toBe(true);
+    expect(validateUpload({ type: "image/gif", size: 1024 }).valid).toBe(false);
   });
 });
 ```
 
-Use a behavior-focused `describe` title and a complete sentence in each `it` title. The current examples in `tests/scanFlow.test.ts` and `tests/invitationLifecycle.test.ts` cover accepted behavior plus important invalid/edge conditions within the same suite.
-
-**Patterns:**
-- Construct minimal data inline when it is short. `tests/invitationLifecycle.test.ts` uses literal invitation records and an explicit fixed timestamp.
-- Define a local typed factory when many cases share domain data. `tests/measurementMapping.test.ts` uses `measurement(...)` to produce `Measurement` records.
-- Make time deterministic by passing `now` as an argument rather than mocking `Date.now()`.
-- Test pure helpers directly through their public exports; do not mount `src/App.tsx` for logic in `src/lib/`.
-- In pytest, use individual `test_` functions and explicit local setup. Use `tmp_path` for output files and `monkeypatch` only for module-level runtime dependencies, as in `ai-service/tests/test_api.py`.
+**Suite organization (pytest):** function-per-scenario, `tmp_path` + `monkeypatch` fixtures, FastAPI `TestClient` in a `with` block.
+```python
+def test_api_processes_multipart_scan_and_exposes_result_endpoints(tmp_path, monkeypatch):
+    settings = build_settings(tmp_path)
+    monkeypatch.setattr(main_module, "settings", settings)
+    ...
+    with TestClient(app) as client:
+        response = client.post("/api/v1/body-scan", files=files, data={"height_cm": "170"})
+```
 
 ## Mocking
 
-**Framework:**
-- Vitest's mocking APIs are available but not used by the current root tests.
-- pytest's built-in `monkeypatch` fixture is used for FastAPI module globals in `ai-service/tests/test_api.py`.
+**JS/TS:** Minimal — tests favor pure functions fed literal inputs over mocks. No `vi.mock` in current suites; boundary functions (`normalizeProviderResponse`) are tested directly with hand-built payloads.
 
-**Patterns:**
-```python
-settings = Settings(..., output_dir=tmp_path / "output", api_key=None, allowed_origins=())
-monkeypatch.setattr(main_module, "settings", settings)
-monkeypatch.setattr(main_module, "pipeline", BodyScanPipeline(settings))
-main_module.stored_scans.clear()
-```
+**Python:** `pytest`'s `monkeypatch.setattr` swaps module-level singletons and heavy stages:
+- Replace `main_module.settings` / `main_module.pipeline` with test builds.
+- Stub expensive/ML steps: `pipeline_module.validate_pose`, `fit_anny_body`, `BodyScanPipeline._anny_targets` return fixed fixtures.
 
-Use real lightweight domain implementations when possible: `ai-service/tests/test_silhouette_pipeline.py` runs the silhouette pipeline with generated images, while root tests call real deterministic helpers. Restore or isolate any mutable module state when using `monkeypatch`.
-
-**What to Mock:**
-- Mock or inject external process/configuration boundaries: environment-derived settings, temporary output locations, remote providers, and process-wide FastAPI state.
-- Use a fixed `Settings` instance with CPU/silhouette configuration for Python tests, rather than requiring model assets or a GPU.
-
-**What NOT to Mock:**
-- Do not mock pure validation, mapping, unit conversion, or lifecycle functions in `src/lib/`; assert their results directly.
-- Do not replace image bytes with opaque mocks when `ai-service/tests/helpers.py` can generate a small valid in-memory PNG.
+**What to mock:** external/expensive stages (pose model, mesh fitting, ML inference), settings, filesystem targets via `tmp_path`.
+**What NOT to mock:** the domain logic under test — calibration math, measurement normalization, and response shaping run for real.
 
 ## Fixtures and Factories
 
-**Test Data:**
-```typescript
-function measurement(key: string, value: number, unit: "cm" | "in" = "cm", adjusted_value: number | null = null): Measurement {
-  return {
-    id: key,
-    scan_id: "scan-1",
-    key,
-    value,
-    unit,
-    confidence: 90,
-    ai_value: value,
-    adjusted_value,
-    adjusted_by: null,
-    adjustment_reason: null,
-    verified_at: null,
-    created_at: "2026-01-01T00:00:00.000Z",
-    updated_at: "2026-01-01T00:00:00.000Z",
-  };
-}
-```
-
-Use the factory pattern from `tests/measurementMapping.test.ts` for typed records with many irrelevant required fields. Override only the values relevant to the assertion.
-
+**Python:** shared helpers generate deterministic synthetic input instead of loading binary assets:
 ```python
-def make_body_image(width: int = 480, height: int = 960) -> bytes:
+# ai-service/tests/helpers.py
+def make_body_image(width=480, height=960) -> bytes:
     image = Image.new("RGB", (width, height), "white")
-    # Draw a simple full-body silhouette, then serialize it as PNG bytes.
-    ...
+    ...  # draws a stylized silhouette with PIL
     return buffer.getvalue()
 ```
+Reusable settings/body factories (`build_settings`, `fitted_body_fixture`) live in `test_silhouette_pipeline.py` and are imported by `test_api.py`. `conftest.py` only wires `sys.path`.
 
-Use `make_body_image` from `ai-service/tests/helpers.py` for valid scan uploads, pipeline inputs, and FastAPI multipart files.
-
-**Location:**
-- Keep a fixture/factory local to one TypeScript test file unless another test uses it.
-- Put reusable Python test helpers in `ai-service/tests/helpers.py`; put suite-wide pytest setup in `ai-service/tests/conftest.py`.
+**JS/TS:** inline object literals built per assertion (e.g. staged-attempt records in `scanProcessingTracer.test.mjs`); no separate fixture files.
 
 ## Coverage
 
-**Requirements:** No coverage threshold, reporter, or coverage command is configured in `package.json` or `ai-service/pyproject.toml`.
-
-**View Coverage:**
+**Requirements:** None enforced — no coverage threshold in config, no coverage in the `test` script or CI gate observed.
 ```bash
-# Not configured. Add a coverage provider and script before relying on coverage reports.
+npx vitest run --coverage         # ad hoc JS/TS
+cd ai-service && pytest --cov=app # requires pytest-cov (not currently pinned)
 ```
 
 ## Test Types
 
-**Unit Tests:**
-- Vitest unit tests cover pure business logic and contract normalization in `tests/invitationLifecycle.test.ts`, `tests/measurementMapping.test.ts`, `tests/scanFlow.test.ts`, and `tests/aiService.test.mjs`.
-- pytest unit tests cover mesh calibration and input validation in `ai-service/tests/test_calibration.py` and `ai-service/tests/test_image_validation.py`.
-
-**Integration Tests:**
-- `ai-service/tests/test_silhouette_pipeline.py` exercises validation, reconstruction, calibration, measurement generation, GLB export, and filesystem output with `tmp_path`.
-- `ai-service/tests/test_api.py` uses FastAPI `TestClient` to send multipart data and validate response, status, measurement, and model-file endpoints.
-
-**E2E Tests:**
-- Not used for the web/mobile application. Android has generated Capacitor example tests in `android/app/src/test/java/com/getcapacitor/myapp/ExampleUnitTest.java` and `android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java`; they are not application E2E coverage.
+**Unit tests:** dominant style — pure functions and math (`test_calibration.py`, `scanFlow.test.ts`, `measurementMapping.test.ts`).
+**Contract tests:** cross-runtime boundary guarantees — `tests/adapters.contract.test.ts` and `tests/scanProcessingTracer.test.mjs` assert only safe fields cross the SPA/Node boundary; `aiService.test.mjs` locks the AI provider response contract.
+**Integration tests:** `ai-service/tests/test_api.py` exercises the full FastAPI multipart pipeline via `TestClient` with heavy stages stubbed; `test_resource_bounds.py` covers concurrency/limit behavior.
+**E2E tests:** Not used.
 
 ## Common Patterns
 
-**Async Testing:**
+**Truthfulness-focused assertions:** tests explicitly guard against dishonest data (`null` confidence must not become `0%`; measurement-only output must never be reported as `completed`):
 ```typescript
-// Keep deterministic async boundary tests focused on the returned promise.
-await expect(asyncOperation()).resolves.toEqual(expected);
-await expect(asyncOperation()).rejects.toThrow("expected message");
-```
-
-No current Vitest test is asynchronous. When adding one, use Vitest's `await expect(...).resolves/rejects` pattern and avoid timers or live network calls. For Python API behavior, use synchronous `TestClient` calls as in `ai-service/tests/test_api.py` unless the code under test requires async execution.
-
-**Error Testing:**
-```typescript
-expect(() => normalizeProviderResponse({ measurements: [] }, "scan-1"))
+expect(result.measurements[0].confidence).toBeNull();
+expect(() => normalizeProviderResponse({ ...metadata, measurements: [] }, "scan-1"))
   .toThrow("no valid measurements");
 ```
 
+**Error testing:**
+```typescript
+expect(() => normalizeProviderResponse(payloadWithDuplicates, "scan-1")).toThrow("duplicate");
+```
 ```python
-with pytest.raises(ImageValidationError) as error:
-    validate_views({"front": make_body_image()}, None, 10 * 1024 * 1024)
-codes = {issue.code for issue in error.value.issues}
-assert {"HEIGHT_REQUIRED", "IMAGE_REQUIRED"}.issubset(codes)
+with pytest.raises(CalibrationError):
+    calibrate_vertices(bad_vertices, height_cm=600)
 ```
 
-Assert observable error messages for stable Node boundaries and structured error codes for Python validation. This matches `tests/aiService.test.mjs` and `ai-service/tests/test_image_validation.py`.
+**Numeric tolerance:** unit conversions use `toBeCloseTo` (JS) / `pytest.approx` (Python) — e.g. inches→cm `expect(...value).toBeCloseTo(81.28)`.
 
 ---
 
-*Testing analysis: 2026-09-01*
+*Testing analysis: 2026-09-25*

@@ -1,92 +1,86 @@
 # Technology Stack
 
-**Analysis Date:** 2026-09-01
+**Analysis Date:** 2026-09-25
 
 ## Languages
 
 **Primary:**
-- TypeScript (ES2022 target) - React browser application in `src/`, Supabase Edge Functions in `supabase/functions/`, and Vite configuration in `vite.config.ts`.
-- JavaScript (ES modules) - Node.js API, MariaDB access, notifications, backups, and AI-service adapter in `server/*.mjs`.
-- Python (3.11 target; 3.12 container image) - FastAPI body-scan/reconstruction service in `ai-service/app/`.
+- TypeScript (ES2022, strict) - Frontend SPA in `src/` and `tsconfig.json`
+- JavaScript (ESM `.mjs`) - Node.js API gateway in `server/`
+- Python 3.11+ (3.12+ for CLAD) - AI reconstruction service in `ai-service/app/`
 
 **Secondary:**
-- SQL (PostgreSQL/Supabase and MySQL/MariaDB dialects) - hosted schema/migrations in `supabase/migrations/` and local/XAMPP schema in `xampp/database/sukatai.sql`.
-- PHP - optional Apache/XAMPP API fallback in `xampp/api/index.php`.
-- CSS - application styling in `src/styles.css`.
+- PHP - Alternate XAMPP API runtime in `xampp/api/` (`index.php`, `config.php`, `mailer.php`)
+- SQL (MariaDB) - Schema in `xampp/database/sukatai.sql`
+- PowerShell - XAMPP deploy script `xampp/install-xampp.ps1`
 
 ## Runtime
 
 **Environment:**
-- Node.js - local installation reports `v24.20.0`; `package.json` does not declare an `engines` constraint.
-- Python - `ai-service/pyproject.toml` targets Python 3.11; `ai-service/Dockerfile` packages the service on `python:3.12-slim`.
-- PHP/Apache/MySQL - optional XAMPP runtime described in `xampp/README.md`.
+- Node.js (ESM, `"type": "module"`) - API gateway `server/index.mjs`, raw `node:http` + Express
+- Python/uvicorn - FastAPI AI service (`py -3.11 -m uvicorn app.main:app --port 8000`)
+- Browser - Vite-built React SPA
+- Capacitor 8.5.0 - Native Android/iOS wrapper (`@capacitor/android`, `@capacitor/ios`)
 
 **Package Manager:**
-- npm 11.19.0 - scripts and dependencies declared in `package.json`.
-- Lockfile: present as `package-lock.json`.
-- Python dependencies are pip requirement files: `ai-service/requirements.txt` and `ai-service/requirements-dev.txt`; no Python lockfile is present.
+- npm - Lockfile: `package-lock.json` present (v0.1.0, `sukatai`)
+- pip - `ai-service/requirements.txt`, `ai-service/requirements-dev.txt`
 
 ## Frameworks
 
 **Core:**
-- React 19.2.8 / React DOM 19.2.8 - single-page UI bootstrapped by `src/main.tsx` and implemented largely in `src/App.tsx`.
-- Vite 8.2.2 with `@vitejs/plugin-react` 6.1.1 - browser build and local development configured in `vite.config.ts`.
-- Express 5.2.1 - optional Node API/server in `server/index.mjs`.
-- FastAPI `>=0.115,<1` with Uvicorn `>=0.34,<1` - isolated body-scan HTTP API in `ai-service/app/main.py`.
-- Supabase Edge Functions (Deno) - hosted processing and invitation endpoints in `supabase/functions/`.
-- Capacitor 8.5.0 - Android/iOS shell configuration in `capacitor.config.ts`; native projects are `android/` and `ios/`.
+- React (latest) + react-dom - SPA UI (`src/App.tsx`, `src/main.tsx`)
+- Express 5.2.1 - Node HTTP API and static serving
+- FastAPI (>=0.115,<1) - Python AI service (`ai-service/app/main.py`)
+- Three.js 0.185.1 - 3D body mesh rendering
 
 **Testing:**
-- Vitest 4.1.11 - frontend/unit test command in `package.json`; tests live in `tests/`.
-- pytest `>=8.3,<9` with HTTPX `>=0.28,<1` - AI-service tests in `ai-service/tests/`.
+- Vitest (latest) - Frontend/Node tests (`npm test` → `vitest run`, config in `tsconfig.json` types)
+- pytest (>=8.3,<9) + httpx - Python service tests (`requirements-dev.txt`)
 
 **Build/Dev:**
-- TypeScript 7.0.2 - strict no-emit type checking set by `tsconfig.json` and invoked by `package.json` scripts.
-- Docker - AI service image definition in `ai-service/Dockerfile`.
-- Capacitor CLI 8.5.0 - mobile syncing, APK build, run, and open scripts in `package.json`.
+- Vite (latest) + `@vitejs/plugin-react` - Bundler with multi-mode builds (`vite.config.ts`: node/xampp/mobile)
+- TypeScript compiler (`tsc --noEmit`) - Type-check / lint step
 
 ## Key Dependencies
 
 **Critical:**
-- `@supabase/supabase-js` 2.112.4 - hosted authentication, Postgres data access, private storage, and Edge Function invocation from `src/lib/supabase.ts`, `src/lib/auth.ts`, `src/lib/data.ts`, and `src/lib/storage.ts`.
-- `three` 0.185.1 - browser WebGL measurement/body-model rendering, dynamically loaded by `src/App.tsx`.
-- `express` 5.2.1 and `mariadb` 3.5.3 - local Node API and relational persistence in `server/index.mjs` and `server/database.mjs`.
-- `socket.io` / `socket.io-client` 4.8.3 - authenticated live scan status updates between `server/index.mjs` and `src/lib/nodeApi.ts`.
-- `fastapi`, `numpy`, `Pillow`, `opencv-python-headless`, `trimesh`, and `rembg[cpu]` - image validation, segmentation, reconstruction, measurements, and GLB output in `ai-service/app/`.
+- `mediapipe` 1.0.1 - Pose landmark detection (CPU-only body scan)
+- `clad-body` 0.6.1 - CLAD-Body fitted-body reconstruction (pinned; requires Python 3.12+)
+- `anny` 0.3.1 - Parametric human body model (pinned; later releases dropped pose params). Note: gender=0.0 is MALE, 1.0 FEMALE
+- `trimesh` (>=4.6,<5) - Mesh processing/export
+- `opencv-python-headless`, `numpy`, `scipy`, `Pillow`, `pydantic` - Imaging/math/validation
+- `three` 0.185.1 - Client 3D mesh viewer
 
 **Infrastructure:**
-- `bcryptjs` 3.0.3 - password hashing for the Node/XAMPP-local authentication path in `server/index.mjs`.
-- `multer` 2.3.0 - in-memory multipart upload handling in `server/index.mjs`.
-- `dotenv` 17.4.2 - loads only Node-specific environment configuration in `server/config.mjs`.
-- `python-multipart` `>=0.0.20,<1` and Pydantic `>=2.10,<3` - FastAPI multipart parsing and API models in `ai-service/app/main.py` and `ai-service/app/schemas/api.py`.
+- `mariadb` 3.5.3 - Node DB driver (`server/database.mjs`)
+- `bcryptjs` 3.0.3 - Password hashing
+- `nodemailer` 10.0.10 - SMTP email (OTP verification)
+- `multer` 2.3.0 - Multipart upload handling
+- `socket.io` / `socket.io-client` 4.8.3 - Real-time scan progress
+- `dotenv` 17.4.2 - Env loading (`.env.node`, `.env.node.local`)
 
 ## Configuration
 
 **Environment:**
-- Browser builds select a backend through `VITE_BACKEND_MODE`, public app origin through `VITE_PUBLIC_APP_URL`, and browser-safe Supabase URL/anon-key variables in `src/lib/supabase.ts`; `vite.config.ts` injects the latter two into the build.
-- Node mode reads `.env.node` and `.env.node.local` only in `server/config.mjs`; the files are present in the repository workspace and contain environment configuration.
-- The AI service reads deployment variables through `ai-service/app/core/config.py`; only variable names and defaults are documented in source, not secret values.
-- Supabase Edge Functions use runtime secrets and configuration accessed through `Deno.env` in `supabase/functions/process-scan/index.ts` and `supabase/functions/_shared/auth.ts`.
+- Multiple env files present (contents not read): `.env.example`, `.env.local`, `.env.mobile(.example)`, `.env.node`, `.env.node.local`, `.env.xampp`
+- Node config: `server/config.mjs` — `SUKATAI_DB_*`, `SUKATAI_WEB_ORIGINS`, `SUKATAI_SMTP_*`, `RESEND_API_KEY`, `TWILIO_*`, `RECONSTRUCTION_*`, cookie/proxy flags; fails fast in production without `SUKATAI_DB_PASS`
+- AI config: `ai-service/app/core/config.py` — `SUKATAI_AI_MODE`, `RECONSTRUCTION_BACKEND` (default `anny_clad`), `AI_SERVICE_API_KEY`, `ALLOWED_ORIGINS`, model dirs, `MEASUREMENT_CALIBRATION_JSON`; device hard-locked to `cpu`
 
 **Build:**
-- Vite modes emit hosted Supabase output to `dist/`, Node output to `dist-node/`, mobile output to `dist-mobile/`, and XAMPP-compatible relative assets via `vite.config.ts`.
-- Vercel builds `npm run build:supabase` and serves `dist/` according to `vercel.json`.
-- Type checking includes `src/`, `tests/`, and `vite.config.ts`, excludes Edge Functions, and uses strict compiler options in `tsconfig.json`.
-- The AI service Docker image exposes port 8000 and starts Uvicorn from `ai-service/Dockerfile`.
+- `vite.config.ts` - Modes: node (`dist-node`), xampp (`./` base, `dist`), mobile (`dist-mobile` + asset copy plugin)
+- `tsconfig.json` - ES2022, bundler resolution, react-jsx, vitest globals, excludes `supabase/functions`
 
 ## Platform Requirements
 
 **Development:**
-- Node.js/npm for the React/Vite app and optional Node API (`package.json`).
-- MariaDB/MySQL for the Node and XAMPP local persistence modes (`server/database.mjs`, `xampp/database/sukatai.sql`).
-- Python 3.11+ and pip for `ai-service/`; optional CUDA/MPS/Torch and licensed PIXIE, SMPL-X, and SMPL-Anthropometry assets are detected by `ai-service/app/core/config.py` and documented in `ai-service/MODEL_SETUP.md`.
-- Android SDK/Gradle or Xcode is required only when using the Capacitor commands in `package.json`.
+- Node.js (ESM), Python 3.11/3.12, npm, optional XAMPP (MariaDB + PHP)
+- Windows-oriented tooling (PowerShell deploy, `py -3.11` launcher)
 
 **Production:**
-- Default hosted frontend target: Vercel (`vercel.json`) with Supabase services and Edge Functions (`supabase/`).
-- Alternative self-hosted target: Node API bound locally on port 3001 with MariaDB and local private storage (`server/index.mjs`, `server/config.mjs`).
-- Optional containerized reconstruction service: FastAPI/Uvicorn on port 8000 (`ai-service/Dockerfile`).
+- Supported target: Intel integrated-GPU laptop, CPU-only inference (never auto-select CUDA)
+- Two interchangeable API runtimes: Node.js gateway or XAMPP/PHP; MariaDB backing store; native mobile via Capacitor
 
 ---
 
-*Stack analysis: 2026-09-01*
+*Stack analysis: 2026-09-25*
