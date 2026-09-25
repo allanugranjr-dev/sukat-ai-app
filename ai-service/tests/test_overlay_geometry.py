@@ -3,14 +3,34 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pydantic
 import pytest
 
 import app.pipeline as pipeline_module
 from app.fitting.anny_fitter import FittedAnnyBody
 from app.pipeline import BodyScanPipeline, _overlay_geometry
 from app.reconstruction.silhouette import ResolvedSilhouetteProfiles, SilhouetteProfile
+from app.schemas.api import OverlayGeometry
 from helpers import make_body_image
 from test_silhouette_pipeline import build_settings, fitted_body_fixture
+
+
+def _valid_overlay_dict() -> dict:
+    """A minimal well-formed overlay dict shaped exactly like _overlay_geometry()."""
+    return {
+        "coordinate_system": "image-normalized",
+        "origin": "top-left",
+        "views": {"front": {"width_px": 200, "height_px": 120}},
+        "lines": {
+            "waist_circumference": {
+                "view": "front",
+                "kind": "circumference",
+                "points": [(0.1, 0.5), (0.6, 0.5)],
+                "level_fraction": 0.65,
+                "source": "silhouette-width-span",
+            }
+        },
+    }
 
 
 def _profile(
@@ -220,4 +240,49 @@ def test_cpu_only_no_reresolve(tmp_path: Path, monkeypatch) -> None:
     )
     assert calls["count"] == 1
     assert result.reconstruction.device == "cpu"
+
+
+def test_schema_accepts_valid_overlay() -> None:
+    """A well-formed overlay dict constructs an OverlayGeometry and round-trips."""
+    overlay = OverlayGeometry(**_valid_overlay_dict())
+
+    assert overlay.coordinate_system == "image-normalized"
+    assert overlay.origin == "top-left"
+    assert overlay.views["front"].width_px == 200
+    assert overlay.views["front"].height_px == 120
+
+    line = overlay.lines["waist_circumference"]
+    assert line.view == "front"
+    assert line.kind == "circumference"
+    assert line.level_fraction == pytest.approx(0.65)
+    assert len(line.points) == 2
+
+    dumped = overlay.model_dump()
+    assert dumped["coordinate_system"] == "image-normalized"
+    (x0, y0), (x1, y1) = dumped["lines"]["waist_circumference"]["points"]
+    assert (x0, y0, x1, y1) == pytest.approx((0.1, 0.5, 0.6, 0.5))
+
+
+def test_malformed_rejected() -> None:
+    """Non-finite / out-of-[0,1] points and a line.view absent from views raise."""
+
+    def _overlay_with_first_point(point) -> dict:
+        overlay = _valid_overlay_dict()
+        overlay["lines"]["waist_circumference"]["points"] = [point, (0.6, 0.5)]
+        return overlay
+
+    for bad_point in [
+        (float("nan"), 0.5),
+        (float("inf"), 0.5),
+        (1.5, 0.5),
+        (-0.1, 0.5),
+    ]:
+        with pytest.raises(pydantic.ValidationError):
+            OverlayGeometry(**_overlay_with_first_point(bad_point))
+
+    # A line whose view has no matching key in views is rejected.
+    missing_view = _valid_overlay_dict()
+    missing_view["lines"]["waist_circumference"]["view"] = "side"
+    with pytest.raises(pydantic.ValidationError):
+        OverlayGeometry(**missing_view)
 
