@@ -11,7 +11,7 @@ keeping the existing 3D mannequin behind a toggle.
 
 ## Phases
 
-- [ ] **Phase 1: 2D overlay geometry in the AI service** - Emit per-measurement image-space guide lines from data already computed
+- [x] **Phase 1: 2D overlay geometry in the AI service** - Emit per-measurement image-space guide lines from data already computed (completed 2026-09-26)
 - [ ] **Phase 2: Carry overlay through the contract** - Deliver + persist overlay geometry across Node/PHP runtimes; serve photos to client
 - [ ] **Phase 3: Real-photo overlay result view** - Render photo with labeled lines, best-view-per-measurement, responsive scaling
 - [ ] **Phase 4: 3D mannequin toggle + fallback** - Keep the mannequin as an option; graceful fallback when overlay is absent
@@ -104,7 +104,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. 2D overlay geometry in the AI service | 2/2 | In Progress|  |
+| 1. 2D overlay geometry in the AI service | 2/2 | Complete    | 2026-09-26 |
 | 2. Carry overlay through the contract | 0/3 | Not started | - |
 | 3. Real-photo overlay result view | 0/2 | Not started | - |
 | 4. 3D mannequin toggle + fallback | 0/1 | Not started | - |
