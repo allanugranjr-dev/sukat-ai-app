@@ -5,24 +5,29 @@
   "phases": [
     {
       "number": "1",
-      "name": "End-to-End Truthful Scan Tracer",
-      "status": "complete"
+      "name": "2D overlay geometry in the AI service",
+      "status": "pending"
     },
     {
       "number": "2",
-      "name": "Cross-Runtime and Legacy Review Continuity",
-      "status": "complete"
+      "name": "Carry overlay through the contract",
+      "status": "pending"
     },
     {
       "number": "3",
-      "name": "CPU Release Verification and Evaluation",
+      "name": "Real-photo overlay result view",
+      "status": "pending"
+    },
+    {
+      "number": "4",
+      "name": "3D mannequin toggle + fallback",
       "status": "pending"
     }
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 3)",
-    "reason": "Phase 3 of 3 — needs a plan"
+    "label": "Advance to the next step",
+    "reason": "Phase 1 of 4 · 0% · executing"
   },
-  "updated_at": "2026-09-03T14:45:00.000Z"
+  "updated_at": "2026-09-25T15:14:31.282Z"
 }

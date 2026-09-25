@@ -471,14 +471,16 @@ No NEW external dependencies. Phase 1 is pure Python within the existing `ai-ser
 | A2 | `upper_arm` should be OMITTED in v1 because per-row run x-positions aren't retained. | Mapping / Open Questions | If stakeholders require an `upper_arm` line, silhouette extraction must be extended (larger change). |
 | A3 | `guide_fractions[short_key]` is preferred over the tailoring fixed fraction when both exist. | Mapping | Minor vertical placement difference (e.g. waist 0.62 vs 0.65); both are body-truthful, D-09 prefers CLAD. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`upper_arm` overlay — omit or invest?**
+   - **RESOLVED (D-02): OMIT in v1.** The locked decision D-02 (omit rather than estimate any line lacking a reliable silhouette anchor) settles this; the value still appears in `measurements`. Both plans implement it (01-01 Task 2 omits `upper_arm`).
    - What we know: arm circumference uses a residual; profile stores widths, not run x-positions; separability check exists (`_arm_diameter`).
    - What's unclear: whether a truthful arm segment is required in v1.
    - Recommendation: OMIT in v1 (D-02). If required later, add per-row run-extent arrays (nearest-run `start`/`end`, and full-span `left`/`right`) to `SilhouetteProfile` inside the extraction loop that already computes `nearest_start`/`nearest_end` `[VERIFIED: ai-service/app/reconstruction/silhouette.py:480-490]` — a contained addition that would also make ALL bands exactly positioned.
 
 2. **Exact horizontal endpoints vs centered span.**
+   - **RESOLVED (D-08): centered silhouette-width span for v1.** D-08 locks horizontal endpoints to `SilhouetteProfile.width_at(fraction, center=True)`; the span (the trust-critical part) is exact and pose-landmark spanning is deferred. Both plans implement the centered `width_at` span.
    - Recommendation: centered span for v1 (zero change to `silhouette.py`, least-invasive). Note the run-extent upgrade (Q1) as the path to pixel-exact endpoints if the trust story demands it.
 
 ## Sources
