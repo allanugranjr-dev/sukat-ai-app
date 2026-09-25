@@ -313,6 +313,21 @@ def _guide_geometry(vertices: np.ndarray, faces: np.ndarray, guide_fractions: di
     }
 
 
+_OVERLAY_FRACTION_KEYS = {
+    "chest_circumference": "chest",
+    "waist_circumference": "waist",
+    "hip_circumference": "hip",
+    "thigh_left_circumference": "thigh",
+}
+_OVERLAY_FIXED_FRACTIONS = {
+    "chest_circumference": 0.70,
+    "waist_circumference": 0.65,
+    "hip_circumference": 0.64,
+    "thigh_left_circumference": 0.42,
+    "shoulder": 0.75,
+}
+
+
 def _overlay_geometry(
     front: SilhouetteProfile | None,
     side: SilhouetteProfile | None,
@@ -327,7 +342,9 @@ def _overlay_geometry(
     tagged with the profile's ``.view`` (the submitted slot the client shows),
     which is swap-safe because ``resolve_front_side_profiles`` never rebuilds the
     frozen dataclass. Only truthful lines are drawn — an unanchorable level is
-    omitted rather than guessed (D-02).
+    omitted rather than guessed (D-02). ``upper_arm`` is always omitted in v1:
+    the profile stores per-row width scalars, not the run x-positions, so an arm
+    segment cannot be placed truthfully; its value still appears in measurements.
     """
 
     views: dict[str, Any] = {}
@@ -341,27 +358,88 @@ def _overlay_geometry(
     if front is None:
         return overlay
 
-    raw_fraction = guide_fractions.get("waist")
-    fraction = float(raw_fraction) if raw_fraction is not None else 0.65
-    if not np.isfinite(fraction):
-        return overlay
-    width_px = front.width_at(fraction, center=True)
-    if width_px <= 0:
-        return overlay
+    def _register_view(profile: SilhouetteProfile) -> None:
+        views[profile.view] = {"width_px": int(profile.image_width), "height_px": int(profile.image_height)}
 
-    row_px = front.bottom - fraction * front.height_px
-    cx = (front.left + front.right) / 2.0
-    x0 = float(np.clip((cx - width_px / 2.0) / front.image_width, 0.0, 1.0))
-    x1 = float(np.clip((cx + width_px / 2.0) / front.image_width, 0.0, 1.0))
-    y = row_px / front.image_height
-    views[front.view] = {"width_px": int(front.image_width), "height_px": int(front.image_height)}
-    lines["waist_circumference"] = {
+    def _norm_x(profile: SilhouetteProfile, x_px: float) -> float:
+        return float(np.clip(x_px / profile.image_width, 0.0, 1.0))
+
+    def _norm_y(profile: SilhouetteProfile, y_px: float) -> float:
+        return float(np.clip(y_px / profile.image_height, 0.0, 1.0))
+
+    def _horizontal_points(profile: SilhouetteProfile, fraction: float, *, center: bool) -> list | None:
+        width_px = profile.width_at(fraction, center=center)
+        if width_px <= 0:
+            return None
+        row_px = profile.bottom - fraction * profile.height_px
+        cx = (profile.left + profile.right) / 2.0
+        y = round(_norm_y(profile, row_px), 5)
+        x0 = round(_norm_x(profile, cx - width_px / 2.0), 5)
+        x1 = round(_norm_x(profile, cx + width_px / 2.0), 5)
+        return [(x0, y), (x1, y)]
+
+    def _vertical_points(profile: SilhouetteProfile, top_row_px: float, bottom_row_px: float) -> list:
+        cx = (profile.left + profile.right) / 2.0
+        x = round(_norm_x(profile, cx), 5)
+        return [
+            (x, round(_norm_y(profile, top_row_px), 5)),
+            (x, round(_norm_y(profile, bottom_row_px), 5)),
+        ]
+
+    # Circumferences: horizontal body-width span at a CLAD (or fixed) body level.
+    for key, short in _OVERLAY_FRACTION_KEYS.items():
+        raw = guide_fractions.get(short)
+        fraction = float(raw) if raw is not None and np.isfinite(float(raw)) else _OVERLAY_FIXED_FRACTIONS[key]
+        if not np.isfinite(fraction):
+            continue
+        points = _horizontal_points(front, fraction, center=True)
+        if points is None:
+            continue
+        _register_view(front)
+        lines[key] = {
+            "view": front.view,
+            "kind": "circumference",
+            "points": points,
+            "level_fraction": round(float(fraction), 5),
+            "source": "silhouette-width-span",
+        }
+
+    # Shoulder: full-span width at the acromion level.
+    shoulder_fraction = _OVERLAY_FIXED_FRACTIONS["shoulder"]
+    shoulder_points = _horizontal_points(front, shoulder_fraction, center=False)
+    if shoulder_points is not None:
+        _register_view(front)
+        lines["shoulder"] = {
+            "view": front.view,
+            "kind": "width",
+            "points": shoulder_points,
+            "level_fraction": round(float(shoulder_fraction), 5),
+            "source": "silhouette-width-span",
+        }
+
+    # Height: a vertical dimension line from the feet (bottom) to the head (top).
+    _register_view(front)
+    lines["height"] = {
         "view": front.view,
-        "kind": "circumference",
-        "points": [(round(x0, 5), round(y, 5)), (round(x1, 5), round(y, 5))],
-        "level_fraction": round(fraction, 5),
-        "source": "silhouette-width-span",
+        "kind": "length",
+        "points": _vertical_points(front, float(front.top), float(front.bottom)),
+        "level_fraction": 1.0,
+        "source": "silhouette-vertical-span",
     }
+
+    # Inseam: a vertical dimension line from the crotch level down to the feet.
+    crotch_fraction = float(front.crotch_fraction())
+    if np.isfinite(crotch_fraction):
+        crotch_row = front.bottom - crotch_fraction * front.height_px
+        _register_view(front)
+        lines["inseam"] = {
+            "view": front.view,
+            "kind": "length",
+            "points": _vertical_points(front, crotch_row, float(front.bottom)),
+            "level_fraction": round(crotch_fraction, 5),
+            "source": "silhouette-vertical-span",
+        }
+
     return overlay
 
 
