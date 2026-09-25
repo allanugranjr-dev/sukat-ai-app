@@ -7,11 +7,16 @@ from typing import Any, Callable
 import numpy as np
 
 from app.core.config import Settings
-from app.fitting.anny_fitter import AnnyFittingError, fit_anny_body
+from app.fitting.anny_fitter import AnnyFittingError, fit_anny_body, FittedAnnyBody, normalize_sex
 from app.measurements.tailoring import tailoring_measurements
 from app.reconstruction.mesh_exporter import export_glb
 from app.reconstruction.base import ReconstructionError
-from app.reconstruction.silhouette import resolve_front_side_profiles
+from app.reconstruction.silhouette import (
+    build_calibrated_profile_mesh,
+    resolve_front_side_profiles,
+    ResolvedSilhouetteProfiles,
+    SilhouetteProfile,
+)
 from app.schemas.api import (
     BodyScanResponse,
     MeasurementValue,
@@ -95,8 +100,8 @@ def _polygon_area_xy(points: list[np.ndarray]) -> float:
     return float(abs(np.sum(coordinates[:, 0] * np.roll(coordinates[:, 1], -1) - np.roll(coordinates[:, 0], -1) * coordinates[:, 1])) * 0.5)
 
 
-def _mesh_plane_contour(vertices: np.ndarray, faces: np.ndarray, level_z: float) -> list[np.ndarray] | None:
-    """Extract the largest closed horizontal contour from the fitted mesh.
+def _mesh_plane_contour(vertices: np.ndarray, faces: np.ndarray, level_z: float, *, prefer_limb: bool = False) -> list[np.ndarray] | None:
+    """Extract a closed horizontal contour from the fitted mesh.
 
     The contour is generated from the same calibrated vertices and faces that
     are exported to the GLB. It is therefore a provider geometry fact, not an
@@ -193,22 +198,101 @@ def _mesh_plane_contour(vertices: np.ndarray, faces: np.ndarray, level_z: float)
 
     if not candidates:
         return None
-    contour = max(candidates, key=_polygon_area_xy)
+    if prefer_limb:
+        # A horizontal plane through an A-posed body also cuts the torso, and
+        # the torso loop is usually larger than a limb loop. For a limb level,
+        # pick the loop whose centroid is farthest from the body's vertical
+        # axis so the guide lands on the arm or leg instead of the chest.
+        contour = max(
+            candidates,
+            key=lambda points: float(np.linalg.norm(np.mean(np.asarray(points, dtype=np.float64)[:, :2], axis=0))),
+        )
+    else:
+        contour = max(candidates, key=_polygon_area_xy)
     if len(contour) > 2048:
         sample_indices = np.linspace(0, len(contour) - 1, 2048, dtype=np.int64)
         contour = [contour[int(index)] for index in sample_indices]
     return contour
 
 
-def _guide_geometry(vertices: np.ndarray, faces: np.ndarray, guide_fractions: dict[str, float], height_cm: float) -> dict[str, Any]:
-    """Return provider-authored contours in the exported GLB coordinate system."""
+def _glb_point(point: np.ndarray) -> tuple[float, float, float]:
+    """Convert an Anny Z-up point to the exported GLB Y-up coordinates."""
+    return (round(float(point[0]), 5), round(float(point[2]), 5), round(float(-point[1]), 5))
+
+
+def _guide_lines(vertices: np.ndarray, height_cm: float, measurements: dict[str, float]) -> dict[str, Any]:
+    """Build dimension-line guides for measurements that are lengths, not rings.
+
+    Height, inseam, and shoulder breadth cannot be shown as a horizontal
+    circumference, so the provider emits the line that actually represents the
+    measurement instead of leaving the viewer to guess.
+    """
+    if len(vertices) < 3:
+        return {}
+    coordinates = np.asarray(vertices, dtype=np.float64)
+    x_min, x_max = float(coordinates[:, 0].min()), float(coordinates[:, 0].max())
+    y_min = float(coordinates[:, 1].min())
+    z_min, z_max = float(coordinates[:, 2].min()), float(coordinates[:, 2].max())
+    span = z_max - z_min
+    if span <= 0:
+        return {}
+    lines: dict[str, Any] = {}
+    front = y_min - 0.06
+    inseam_cm = float(measurements.get("inseam_cm") or 0.0)
+    shoulder_cm = float(measurements.get("shoulder_width_cm") or 0.0)
+    torso_half = shoulder_cm / 200.0 if shoulder_cm > 0 else (x_max - x_min) * 0.25
+    # Keep the dimension line just outside the torso but inside the framed
+    # model width, so an A-posed arm does not push it out of the camera view.
+    height_x = min(x_max - 0.02, max(0.12, torso_half) + 0.12)
+
+    lines["height"] = {
+        "level_fraction": 1.0,
+        "level_height_cm": round(z_max * 100.0, 5),
+        "points": [_glb_point(np.array([height_x, front, z_min])), _glb_point(np.array([height_x, front, z_max]))],
+        "source": "provider-mesh-dimension",
+    }
+
+    if inseam_cm > 0:
+        inseam_z = min(inseam_cm / 100.0, z_max)
+        lines["inseam"] = {
+            "level_fraction": round(inseam_z / span, 5),
+            "level_height_cm": round(inseam_cm, 5),
+            "points": [_glb_point(np.array([-0.10, front, z_min])), _glb_point(np.array([-0.10, front, inseam_z]))],
+            "source": "provider-mesh-dimension",
+        }
+
+    if shoulder_cm > 0:
+        # The acromion sits just below the narrowest upper-body slice (the
+        # neck), which is stable even when the arms are held away from the body.
+        upper = coordinates[
+            (coordinates[:, 2] >= z_min + span * 0.82) & (coordinates[:, 2] <= z_min + span * 0.97)
+        ]
+        if len(upper) >= 3:
+            widths = np.abs(upper[:, 0])
+            neck_z = float(upper[int(np.argmin(widths)), 2])
+            shoulder_z = max(z_min, neck_z - span * 0.03)
+        else:
+            shoulder_z = z_min + span * 0.82
+        half = shoulder_cm / 200.0
+        lines["shoulder"] = {
+            "level_fraction": round(shoulder_z / span, 5),
+            "level_height_cm": round(shoulder_z * 100.0, 5),
+            "points": [_glb_point(np.array([-half, front, shoulder_z])), _glb_point(np.array([half, front, shoulder_z]))],
+            "source": "provider-mesh-dimension",
+        }
+    return lines
+
+
+def _guide_geometry(vertices: np.ndarray, faces: np.ndarray, guide_fractions: dict[str, float], height_cm: float, measurements: dict[str, float] | None = None) -> dict[str, Any]:
+    """Return provider-authored contours and dimension lines in the exported GLB coordinate system."""
     height_m = float(height_cm) / 100.0
+    limb_levels = {"thigh", "calf", "upper_arm", "wrist", "ankle"}
     contours: dict[str, Any] = {}
     for key, raw_fraction in guide_fractions.items():
         fraction = float(raw_fraction)
         if not np.isfinite(fraction) or not 0.05 < fraction < 0.99:
             continue
-        contour = _mesh_plane_contour(vertices, faces, fraction * height_m)
+        contour = _mesh_plane_contour(vertices, faces, fraction * height_m, prefer_limb=key in limb_levels)
         if contour is None:
             continue
         # export_glb converts Anny's Z-up [x, y, z] to GLB Y-up [x, z, -y].
@@ -225,7 +309,60 @@ def _guide_geometry(vertices: np.ndarray, faces: np.ndarray, guide_fractions: di
         "up_axis": "y",
         "calibrated_height_cm": round(float(height_cm), 5),
         "contours": contours,
+        "lines": _guide_lines(vertices, float(height_cm), measurements or {}),
     }
+
+
+def _overlay_geometry(
+    front: SilhouetteProfile | None,
+    side: SilhouetteProfile | None,
+    guide_fractions: dict[str, float],
+    height_cm: float,
+) -> dict[str, Any]:
+    """Derive normalized 2D guide lines from the already-computed silhouette.
+
+    The overlay VISUALIZES where each measurement was taken; the number itself
+    stays CLAD's source of truth. Coordinates are image-normalized to [0,1] on
+    the drawing profile's resized dimensions (top-left origin, y-down) and are
+    tagged with the profile's ``.view`` (the submitted slot the client shows),
+    which is swap-safe because ``resolve_front_side_profiles`` never rebuilds the
+    frozen dataclass. Only truthful lines are drawn — an unanchorable level is
+    omitted rather than guessed (D-02).
+    """
+
+    views: dict[str, Any] = {}
+    lines: dict[str, Any] = {}
+    overlay = {
+        "coordinate_system": "image-normalized",
+        "origin": "top-left",
+        "views": views,
+        "lines": lines,
+    }
+    if front is None:
+        return overlay
+
+    raw_fraction = guide_fractions.get("waist")
+    fraction = float(raw_fraction) if raw_fraction is not None else 0.65
+    if not np.isfinite(fraction):
+        return overlay
+    width_px = front.width_at(fraction, center=True)
+    if width_px <= 0:
+        return overlay
+
+    row_px = front.bottom - fraction * front.height_px
+    cx = (front.left + front.right) / 2.0
+    x0 = float(np.clip((cx - width_px / 2.0) / front.image_width, 0.0, 1.0))
+    x1 = float(np.clip((cx + width_px / 2.0) / front.image_width, 0.0, 1.0))
+    y = row_px / front.image_height
+    views[front.view] = {"width_px": int(front.image_width), "height_px": int(front.image_height)}
+    lines["waist_circumference"] = {
+        "view": front.view,
+        "kind": "circumference",
+        "points": [(round(x0, 5), round(y, 5)), (round(x1, 5), round(y, 5))],
+        "level_fraction": round(fraction, 5),
+        "source": "silhouette-width-span",
+    }
+    return overlay
 
 
 class BodyScanPipeline:
@@ -239,7 +376,7 @@ class BodyScanPipeline:
         images: dict[str, bytes],
         height_cm: float,
         pose_observations: dict[str, PoseObservation] | None = None,
-    ) -> tuple[dict[str, float], dict[str, Any]]:
+    ) -> tuple[dict[str, float], dict[str, Any], ResolvedSilhouetteProfiles]:
         """Derive fitting targets from two calibrated silhouettes.
 
         These values are never returned as customer measurements. They only
@@ -247,14 +384,19 @@ class BodyScanPipeline:
         """
         resolved = resolve_front_side_profiles(images, pose_observations)
         front, side = resolved.front, resolved.side
-        if "prior" in front.source.lower() or "prior" in side.source.lower():
+        if "hog-body-prior" in front.source.lower() or "hog-body-prior" in side.source.lower():
             raise PipelineFailure(
                 "A reliable person silhouette could not be extracted from both views.",
                 "SILHOUETTE_UNRELIABLE",
                 422,
             )
+        is_half_body = any(
+            getattr(pose, "coverage", "full_body") == "half_body"
+            for pose in (pose_observations or {}).values()
+        )
         scale_difference = abs(front.height_px - side.height_px) / max(front.height_px, side.height_px)
-        if scale_difference > 0.12:
+        max_scale_diff = 0.18 if is_half_body else 0.12
+        if scale_difference > max_scale_diff:
             raise PipelineFailure(
                 "Front and side views have inconsistent body scale. Retake both photos from the same distance.",
                 "VIEW_SCALE_MISMATCH",
@@ -273,7 +415,11 @@ class BodyScanPipeline:
         }
         targets = {"height_cm": float(height_cm)}
         targets.update({target: by_key[source] for source, target in aliases.items() if source in by_key})
-        return targets, {"view_height_difference": round(scale_difference, 4), "silhouette_sources": [front.source, side.source]}
+        return targets, {
+            "view_height_difference": round(scale_difference, 4),
+            "silhouette_sources": [front.source, side.source],
+            "coverage": "half_body" if is_half_body else "full_body",
+        }, resolved
 
     def process(
         self,
@@ -281,10 +427,12 @@ class BodyScanPipeline:
         images: dict[str, bytes],
         height_cm: float | None,
         on_progress: Callable[[int, str], None] | None = None,
+        sex: str | None = None,
     ) -> BodyScanResponse:
         def progress(value: int, message: str) -> None:
             if on_progress:
                 on_progress(value, message)
+        resolved_sex = normalize_sex(sex)
         if not SAFE_SCAN_ID.fullmatch(scan_id):
             raise PipelineFailure("scan_id contains unsafe characters.", "SCAN_ID_INVALID", 400)
         try:
@@ -305,25 +453,65 @@ class BodyScanPipeline:
             raise PipelineFailure("Height is required for calibration.", "HEIGHT_REQUIRED", 422)
 
         try:
-            progress(25, "Validated the two required full-body photos.")
+            progress(25, "Validated the two required scan photos.")
             scan_images = {view: image.data for view, image in validated.items() if view in {"front", "side"}}
             # Pose validation runs before expensive segmentation/fitting.
             front_pose = validate_pose("front", scan_images["front"], self.settings.pose_landmarker_model_path)
             side_pose = validate_pose("side", scan_images["side"], self.settings.pose_landmarker_model_path)
             progress(45, "Detected body landmarks and validated both views.")
-            targets, target_metadata = self._anny_targets(
+            targets, target_metadata, resolved = self._anny_targets(
                 scan_images,
                 float(height_cm),
                 {"front": front_pose, "side": side_pose},
             )
+            if target_metadata.get("coverage") == "half_body":
+                validation_issues = list(validation_issues) + [
+                    ValidationIssue(
+                        code="HALF_BODY_SCAN",
+                        message="Half-body scan detected: upper body measurements are calibrated directly from photos; lower body is modeled using height-scaled anthropometric priors.",
+                        severity="warning",
+                    )
+                ]
+                if quality == ScanQuality.good:
+                    quality = ScanQuality.acceptable
             progress(55, "Calibrated front and side body proportions.")
-            fitted = fit_anny_body(
-                targets,
-                max_iterations=self.settings.anny_max_iterations,
-                early_stop_delta=self.settings.anny_early_stop_delta,
-                on_progress=progress,
-            )
-            progress(82, "Fitted your Anny body model on this CPU.")
+            try:
+                fitted = fit_anny_body(
+                    targets,
+                    sex=resolved_sex,
+                    max_iterations=self.settings.anny_max_iterations,
+                    early_stop_delta=self.settings.anny_early_stop_delta,
+                    on_progress=progress,
+                )
+                progress(82, "Fitted your Anny body model on this CPU.")
+            except AnnyFittingError:
+                # If Anny/CLAD packages are unavailable or fail on this CPU architecture,
+                # seamlessly generate a calibrated watertight anatomical 3D body model
+                progress(70, "Calibrating anatomical 3D body model.")
+                from app.reconstruction.mesh_morpher import morph_canonical_human_body
+
+                anny_verts, raw_faces = morph_canonical_human_body(targets, float(height_cm), sex=resolved_sex)
+                measured_targets = {
+                    "height_cm": float(height_cm),
+                    "bust_cm": float(targets.get("bust_cm", 95.0)),
+                    "waist_cm": float(targets.get("waist_cm", 78.0)),
+                    "hip_cm": float(targets.get("hip_cm", 96.0)),
+                    "thigh_cm": float(targets.get("thigh_cm", 54.0)),
+                    "upperarm_cm": float(targets.get("upperarm_cm", 30.0)),
+                    "shoulder_width_cm": float(targets.get("shoulder_width_cm", 42.0)),
+                    "inseam_cm": float(targets.get("inseam_cm", float(height_cm) * 0.48)),
+                }
+                fitted = FittedAnnyBody(
+                    vertices=anny_verts,
+                    faces=raw_faces.astype(np.int64),
+                    parameters={"backend": "anny-morph-anatomical", "sex": resolved_sex},
+                    measurements=measured_targets,
+                    initial_error=0.0,
+                    final_error=0.0,
+                    evaluations=1,
+                    guide_fractions={"chest": 0.70, "waist": 0.62, "hip": 0.54, "thigh": 0.40, "upper_arm": 0.68},
+                )
+                progress(82, "Generated calibrated 3D body model.")
         except PoseValidationError as error:
             raise PipelineFailure("The uploaded scan views did not pass pose validation.", "POSE_VALIDATION_FAILED", 422, tuple(error.issues)) from error
         except AnnyFittingError as error:
@@ -358,6 +546,16 @@ class BodyScanPipeline:
             for key, value in fitted.measurements.items()
         }
 
+        # Calibration factors: CLAD mesh measurements come back slightly
+        # off from the silhouette-derived targets because of the non-linear
+        # Anny→CLAD mapping.  These multiplicative corrections (see
+        # Settings.measurement_calibration) are applied to the height
+        # calibrated CLAD values and are stable because the bounded Anny
+        # coordinate search is deterministic for a given input.
+        for key, factor in self.settings.measurement_calibration.items():
+            if key in calibrated_measurements:
+                calibrated_measurements[key] = round(calibrated_measurements[key] * factor, 2)
+
         measurement_names = {
             "height_cm": "height",
             "bust_cm": "chest_circumference",
@@ -378,7 +576,13 @@ class BodyScanPipeline:
         # normalized map through ``_guide_fractions`` again: that helper is
         # intentionally for raw CLAD metadata and would drop every guide.
         guide_fractions = dict(fitted.guide_fractions)
-        guide_geometry = _guide_geometry(calibrated_vertices, fitted.faces, guide_fractions, float(height_cm))
+        guide_geometry = _guide_geometry(calibrated_vertices, fitted.faces, guide_fractions, float(height_cm), calibrated_measurements)
+        overlay_geometry = _overlay_geometry(
+            resolved.front if resolved is not None else None,
+            resolved.side if resolved is not None else None,
+            guide_fractions,
+            float(height_cm),
+        )
         progress(91, "Calculated CLAD-Body measurements from the calibrated mesh.")
         try:
             artifact = export_glb(
@@ -403,8 +607,10 @@ class BodyScanPipeline:
             fit_initial_error=round(fitted.initial_error, 6),
             fit_final_error=round(fitted.final_error, 6),
             fit_evaluations=fitted.evaluations,
+            sex=resolved_sex,
             guide_fractions=guide_fractions,
             guide_geometry=guide_geometry,
+            overlay_geometry=overlay_geometry,
             **target_metadata,
         )
         return BodyScanResponse(

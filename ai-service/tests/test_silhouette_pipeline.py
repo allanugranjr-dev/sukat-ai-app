@@ -14,7 +14,7 @@ import app.pipeline as pipeline_module
 from app.reconstruction.silhouette import extract_silhouette_profile
 from app.validation.pose_validator import PoseObservation
 import app.validation.pose_validator as pose_validator_module
-from helpers import make_body_image
+from helpers import make_body_image, make_half_body_image
 
 
 def build_settings(tmp_path: Path) -> Settings:
@@ -43,7 +43,7 @@ def test_fitted_anny_pipeline_exports_validated_glb(tmp_path: Path, monkeypatch)
     settings = build_settings(tmp_path)
     monkeypatch.setattr(pipeline_module, "validate_pose", lambda *args, **kwargs: None)
     monkeypatch.setattr(BodyScanPipeline, "_anny_targets", staticmethod(
-        lambda *args, **kwargs: ({"height_cm": 170.0, "bust_cm": 100.0, "waist_cm": 82.0}, {"view_height_difference": 0.01})
+        lambda *args, **kwargs: ({"height_cm": 170.0, "bust_cm": 100.0, "waist_cm": 82.0}, {"view_height_difference": 0.01}, None)
     ))
     monkeypatch.setattr(pipeline_module, "fit_anny_body", lambda *args, **kwargs: fitted_body_fixture())
     result = BodyScanPipeline(settings).process("scan-test-1", {"front": make_body_image(), "side": make_body_image()}, 170)
@@ -132,3 +132,85 @@ def test_side_pose_allows_naturally_overlapping_projected_shoulders(monkeypatch,
     observation = pose_validator_module.validate_pose("side", make_body_image(), tmp_path / "pose.task")
     assert observation.view == "side"
     assert observation.shoulder_width_px < observation.body_height_px
+
+
+def test_validate_pose_accepts_half_body_view(monkeypatch, tmp_path: Path) -> None:
+    class FakeMp:
+        class ImageFormat:
+            SRGB = "SRGB"
+
+        @staticmethod
+        def Image(**kwargs):
+            return kwargs
+
+    points = [SimpleNamespace(x=0.5, y=0.5, visibility=0.0) for _ in range(33)]
+    points[0] = SimpleNamespace(x=0.5, y=0.15, visibility=0.95)
+    points[11] = SimpleNamespace(x=0.35, y=0.30, visibility=0.95)
+    points[12] = SimpleNamespace(x=0.65, y=0.30, visibility=0.95)
+    points[13] = SimpleNamespace(x=0.28, y=0.45, visibility=0.90)
+    points[14] = SimpleNamespace(x=0.72, y=0.45, visibility=0.90)
+    points[23] = SimpleNamespace(x=0.40, y=0.60, visibility=0.85)
+    points[24] = SimpleNamespace(x=0.60, y=0.60, visibility=0.85)
+    points[27] = SimpleNamespace(x=0.40, y=1.20, visibility=0.0)
+    points[28] = SimpleNamespace(x=0.60, y=1.20, visibility=0.0)
+
+    class FakeLandmarker:
+        def detect(self, _image):
+            return SimpleNamespace(pose_landmarks=[points])
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(pose_validator_module, "_load_landmarker", lambda _model_path: (FakeMp, FakeLandmarker()))
+    observation = pose_validator_module.validate_pose("front", make_half_body_image(), tmp_path / "pose.task")
+    assert observation.view == "front"
+    assert observation.coverage == "half_body"
+    assert observation.estimated_full_height_fraction is not None
+    assert observation.estimated_full_height_fraction > observation.body_height_px / 640.0
+
+
+def test_half_body_pose_seeds_and_extrapolates_silhouette(monkeypatch) -> None:
+    monkeypatch.setenv("SUKATAI_PERSON_SEGMENTATION", "off")
+    landmarks = {
+        "nose": (0.50, 0.12, 1.0),
+        "left_shoulder": (0.36, 0.25, 1.0), "right_shoulder": (0.64, 0.25, 1.0),
+        "left_elbow": (0.27, 0.45, 1.0), "right_elbow": (0.73, 0.45, 1.0),
+        "left_wrist": (0.27, 0.65, 1.0), "right_wrist": (0.73, 0.65, 1.0),
+        "left_hip": (0.41, 0.70, 1.0), "right_hip": (0.59, 0.70, 1.0),
+        "left_knee": (0.43, 0.90, 0.0), "right_knee": (0.57, 0.90, 0.0),
+        "left_ankle": (0.43, 1.20, 0.0), "right_ankle": (0.57, 1.20, 0.0),
+        "left_heel": (0.43, 1.22, 0.0), "right_heel": (0.57, 1.22, 0.0),
+    }
+    pose = PoseObservation(
+        "front",
+        landmarks,
+        body_height_px=380.0,
+        shoulder_width_px=134.0,
+        hip_width_px=86.0,
+        coverage="half_body",
+        estimated_full_height_px=760.0,
+        estimated_full_height_fraction=0.88,
+    )
+    profile = extract_silhouette_profile(make_half_body_image(), "front", pose)
+    assert "half-body-extrapolation" in profile.source
+    assert profile.height_px > 400
+    assert profile.width_at(0.70) > 0
+    assert profile.width_at(0.25) > 0
+
+
+def test_half_body_scan_pipeline_processes_successfully(tmp_path: Path, monkeypatch) -> None:
+    settings = build_settings(tmp_path)
+    monkeypatch.setattr(pipeline_module, "validate_pose", lambda *args, **kwargs: None)
+    monkeypatch.setattr(BodyScanPipeline, "_anny_targets", staticmethod(
+        lambda *args, **kwargs: (
+            {"height_cm": 170.0, "bust_cm": 100.0, "waist_cm": 82.0, "hip_cm": 96.0},
+            {"view_height_difference": 0.02, "coverage": "half_body"},
+            None,
+        )
+    ))
+    monkeypatch.setattr(pipeline_module, "fit_anny_body", lambda *args, **kwargs: fitted_body_fixture())
+    result = BodyScanPipeline(settings).process("half-body-scan-1", {"front": make_half_body_image(), "side": make_half_body_image()}, 170)
+    assert result.status.value == "completed"
+    assert result.scan_quality.value == "acceptable"
+    assert any(issue.code == "HALF_BODY_SCAN" for issue in result.quality_issues)
+    assert (tmp_path / "output" / "half-body-scan-1.glb").is_file()
