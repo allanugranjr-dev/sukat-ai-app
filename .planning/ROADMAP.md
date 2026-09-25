@@ -29,7 +29,7 @@ keeping the existing 3D mannequin behind a toggle.
   2. Overlay coordinates are produced with no new model and no GPU/cloud dependency (CPU-only path unchanged).
   3. The overlay payload is schema-validated (finite, bounded) and rejected cleanly if malformed.
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans executed
 
 Plans:
 **Wave 1**
@@ -38,7 +38,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — Add the OverlayGeometry/OverlayLine/OverlayView Pydantic schema + declared field; guard construction with clean INVALID_PROVIDER_RESULT/502 rejection
+- [x] 01-02-PLAN.md — Add the OverlayGeometry/OverlayLine/OverlayView Pydantic schema + declared field; guard construction with clean INVALID_PROVIDER_RESULT/502 rejection
 
 ### Phase 2: Carry overlay through the contract
 
@@ -104,7 +104,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. 2D overlay geometry in the AI service | 1/2 | In Progress|  |
+| 1. 2D overlay geometry in the AI service | 2/2 | In Progress|  |
 | 2. Carry overlay through the contract | 0/3 | Not started | - |
 | 3. Real-photo overlay result view | 0/2 | Not started | - |
 | 4. 3D mannequin toggle + fallback | 0/1 | Not started | - |
