@@ -29,12 +29,12 @@ keeping the existing 3D mannequin behind a toggle.
   2. Overlay coordinates are produced with no new model and no GPU/cloud dependency (CPU-only path unchanged).
   3. The overlay payload is schema-validated (finite, bounded) and rejected cleanly if malformed.
 
-**Plans**: 2 plans
+**Plans**: 1/2 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — Derive per-measurement image-space overlay lines in the pipeline (`_overlay_geometry` + `_anny_targets` 3-tuple), CPU-only, view-swap-safe, omission-truthful
+- [x] 01-01-PLAN.md — Derive per-measurement image-space overlay lines in the pipeline (`_overlay_geometry` + `_anny_targets` 3-tuple), CPU-only, view-swap-safe, omission-truthful
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -104,7 +104,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. 2D overlay geometry in the AI service | 0/2 | Not started | - |
+| 1. 2D overlay geometry in the AI service | 1/2 | In Progress|  |
 | 2. Carry overlay through the contract | 0/3 | Not started | - |
 | 3. Real-photo overlay result view | 0/2 | Not started | - |
 | 4. 3D mannequin toggle + fallback | 0/1 | Not started | - |
