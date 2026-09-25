@@ -286,3 +286,26 @@ def test_malformed_rejected() -> None:
     with pytest.raises(pydantic.ValidationError):
         OverlayGeometry(**missing_view)
 
+
+def test_malformed_rejected_is_clean_502(tmp_path: Path, monkeypatch) -> None:
+    """A malformed overlay dict surfaces as PipelineFailure(502), never a raw 500."""
+    settings = build_settings(tmp_path)
+    monkeypatch.setattr(pipeline_module, "validate_pose", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline_module, "fit_anny_body", lambda *args, **kwargs: fitted_body_fixture())
+
+    def _overlay_with_nan(*args, **kwargs) -> dict:
+        overlay = _valid_overlay_dict()
+        overlay["lines"]["waist_circumference"]["points"] = [(float("nan"), 0.5), (0.6, 0.5)]
+        return overlay
+
+    monkeypatch.setattr(pipeline_module, "_overlay_geometry", _overlay_with_nan)
+
+    with pytest.raises(pipeline_module.PipelineFailure) as excinfo:
+        BodyScanPipeline(settings).process(
+            "overlay-bad-1",
+            {"front": make_body_image(), "side": make_body_image()},
+            170,
+        )
+    assert excinfo.value.code == "INVALID_PROVIDER_RESULT"
+    assert excinfo.value.status_code == 502
+
