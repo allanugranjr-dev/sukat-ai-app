@@ -5,6 +5,7 @@ import re
 from typing import Any, Callable
 
 import numpy as np
+import pydantic
 
 from app.core.config import Settings
 from app.fitting.anny_fitter import AnnyFittingError, fit_anny_body, FittedAnnyBody, normalize_sex
@@ -20,6 +21,7 @@ from app.reconstruction.silhouette import (
 from app.schemas.api import (
     BodyScanResponse,
     MeasurementValue,
+    OverlayGeometry,
     ProcessingStatus,
     ReconstructionMetadata,
     ScanQuality,
@@ -655,12 +657,26 @@ class BodyScanPipeline:
         # intentionally for raw CLAD metadata and would drop every guide.
         guide_fractions = dict(fitted.guide_fractions)
         guide_geometry = _guide_geometry(calibrated_vertices, fitted.faces, guide_fractions, float(height_cm), calibrated_measurements)
-        overlay_geometry = _overlay_geometry(
+        overlay_dict = _overlay_geometry(
             resolved.front if resolved is not None else None,
             resolved.side if resolved is not None else None,
             guide_fractions,
             float(height_cm),
         )
+        # ReconstructionMetadata(...) below is built OUTSIDE the guarded
+        # processing try/except, so a raw pydantic.ValidationError from a
+        # malformed overlay would escape as an unhandled 500. Validate the
+        # overlay here and convert a bad payload into a stable API error,
+        # mirroring the _measurement_values clean-rejection precedent.
+        try:
+            overlay_model = OverlayGeometry(**overlay_dict)
+        except (pydantic.ValidationError, ValueError) as error:
+            raise PipelineFailure(
+                f"The overlay adapter returned invalid geometry: {error}",
+                "INVALID_PROVIDER_RESULT",
+                502,
+            ) from error
+        overlay_geometry = overlay_model if overlay_model.lines else None
         progress(91, "Calculated CLAD-Body measurements from the calibrated mesh.")
         try:
             artifact = export_glb(
