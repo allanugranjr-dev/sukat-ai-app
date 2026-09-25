@@ -1,107 +1,91 @@
-# Roadmap: SukatAI
+# Roadmap: SukatAI — Real-photo measurement overlay
 
 ## Overview
 
-SukatAI will be migrated in place through three coarse, end-to-end phases. Phase 1 delivers the production-quality tracer slice: private front/side capture and height are validated before fitting, a durable attempt produces a truthful persisted result, and the existing model viewer shows provider-aligned guides. Phase 2 carries that contract across the retained Node/MariaDB, hosted Supabase, and XAMPP paths while protecting existing authentication, roles, routes, orders, invitations, uploads, and older scans. Phase 3 proves CPU practicality and reproducibility and adds an evaluation-only path for independent tape references. The roadmap preserves the existing product and never turns process quality or fitting loss into a fabricated accuracy percentage.
+The pipeline already computes everything needed to draw measurements on the real
+photo — it just throws the 2D data away and exports a 3D mannequin instead. This
+milestone surfaces that data end to end: emit 2D overlay geometry from the AI
+service, carry it through both API runtimes and persist it, then render the
+customer's real photo with labeled measurement lines as the default result view —
+keeping the existing 3D mannequin behind a toggle.
 
 ## Phases
 
-**Phase Numbering:**
-
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
-
-- [x] **Phase 1: End-to-End Truthful Scan Tracer** - Validate, process, persist, and review one truthful provider-aligned scan through the existing product flow. *(Local implementation complete; hosted migration push pending.)* (completed 2026-09-03)
-- [x] **Phase 2: Cross-Runtime and Legacy Review Continuity** - Preserve backend, role, route, asset, and older-scan compatibility across supported runtimes. *(Implemented across Node/MariaDB, Supabase, and XAMPP; 72 tests pass.)* (completed 2026-09-03)
-- [x] **Phase 3: CPU Release Verification and Evaluation** - Prove target-laptop operation, automated coverage, reproducible builds, and honest reference-measurement evaluation. *(Completed; 62+ pytest tests, CPU contract documented, evaluation path implemented, reproducible startup documented.)* (completed 2026-09-03)
+- [ ] **Phase 1: 2D overlay geometry in the AI service** - Emit per-measurement image-space guide lines from data already computed
+- [ ] **Phase 2: Carry overlay through the contract** - Deliver + persist overlay geometry across Node/PHP runtimes; serve photos to client
+- [ ] **Phase 3: Real-photo overlay result view** - Render photo with labeled lines, best-view-per-measurement, responsive scaling
+- [ ] **Phase 4: 3D mannequin toggle + fallback** - Keep the mannequin as an option; graceful fallback when overlay is absent
 
 ## Phase Details
 
-### Phase 1: End-to-End Truthful Scan Tracer
-
-**Goal**: Customers can complete the active private front/side scan path from height capture through validation, CPU processing, durable persistence, truthful result review, and a provider-aligned 3D guide; an incomplete or failed attempt never becomes a misleading ready result.
+### Phase 1: 2D overlay geometry in the AI service
+**Goal**: The AI service returns, per measurement, image-space guide-line endpoints keyed to the source view, computed on the CPU from existing silhouette fractions/widths and pose landmarks.
 **Depends on**: Nothing (first phase)
-**Requirements**: TRUTH-01, TRUTH-02, TRUTH-03, VALID-01, VALID-02, GEOM-01, GEOM-02, LIFE-01, LIFE-02, LIFE-03, LIFE-04, PRIV-01, PRIV-02
+**Requirements**: PIPE-01, PIPE-02, PIPE-03
 **Success Criteria** (what must be TRUE):
+  1. A processed scan response includes 2D overlay geometry for each measurement, with normalized endpoints, a `view` (front/side), and each view's pixel dimensions.
+  2. Overlay coordinates are produced with no new model and no GPU/cloud dependency (CPU-only path unchanged).
+  3. The overlay payload is schema-validated (finite, bounded) and rejected cleanly if malformed.
+**Plans**: 2 plans
 
-  1. A customer can submit private front and side assets plus a real height, and each view is checked for decodeability, configured limits, full-body measurability, and required pose before expensive fitting; an invalid scan stays unpublished and shows a specific view-level correction message.
-  2. A valid scan moves through durable validated, processing, ready, failed, and retrying states with an attempt identifier and provider/version metadata; retrying is idempotent, and a failed replacement attempt leaves the last durable ready result available when one exists.
-  3. Ready measurement rows show their unit, method, source/provider, processing version, and scan identifier; input/process quality and provider diagnostics are separate from independently measured accuracy, and absent calibrated confidence or reference ground truth is shown as explicitly unreported/not independently validated with no invented percentage.
-  4. The existing interactive viewer renders each selected measurement's provider-authored level/contour in the same calibrated model coordinate system used to derive the value and keeps guide selection synchronized with the measurement row; any geometry mismatch or fallback is visibly approximate/version-qualified and never presented as measurement-exact.
-  5. Provider, storage, timeout, and persistence failures resolve to actionable user-readable states without stack traces or secrets, while body images and generated model assets remain private through the existing authorization-checked local or time-limited hosted access paths.
+Plans:
+- [ ] 01-01-PLAN.md — Derive per-measurement image-space overlay lines in the pipeline (`_overlay_geometry` + `_anny_targets` 3-tuple), CPU-only, view-swap-safe, omission-truthful
+- [ ] 01-02-PLAN.md — Add the OverlayGeometry/OverlayLine/OverlayView Pydantic schema + declared field; guard construction with clean INVALID_PROVIDER_RESULT/502 rejection
 
-**Plans**: 2/2 local implementation plans complete; hosted migration push pending
-**UI hint**: yes
 
-### Phase 2: Cross-Runtime and Legacy Review Continuity
-
-**Goal**: Existing customers, tailors/dressmakers, and administrators continue using the preserved authentication, role, route, invitation, order, upload, and result workflows while every supported backend returns the same versioned scan contract and older scans remain safely reviewable.
+### Phase 2: Carry overlay through the contract
+**Goal**: Overlay geometry travels from the AI service to the client on the Node runtime and persists with the scan; the PHP runtime matches the response shape; the client can fetch the photos to draw on.
 **Depends on**: Phase 1
-**Requirements**: GEOM-03, BACK-01, BACK-02
+**Requirements**: API-01, API-02, API-03, PAR-01
 **Success Criteria** (what must be TRUE):
-
-  1. Node/MariaDB and hosted Supabase accept, validate, persist, and return the same measurement, provenance, lifecycle, and provider-guide contract for the updated scan flow, and the existing customer, tailor, and administrator routes consume it through the established adapters.
-  2. The retained XAMPP path continues authentication, role authorization, uploads, results, invitations, orders, and private local asset access without breaking the existing workflows or exposing a new public asset path.
-  3. Older scans with missing or outdated guide metadata remain loadable and visibly version-qualified; a fallback guide is clearly labeled approximate and is never presented as measurement-exact.
-
-**Plans**: 4/4 complete
-- [x] 02-01-PLAN.md — Node/MariaDB tracer path with attempt schema and lifecycle (completed 2026-09-03)
-- [x] 02-02-PLAN.md — Supabase hosted migration push and Edge Function parity (completed 2026-09-03)
-- [x] 02-03-PLAN.md — XAMPP/PHP compatibility with legacy scan support (completed 2026-09-03)
-- [x] 02-04-PLAN.md — Adapter contract tests and verification (completed 2026-09-03)
-
-**UI hint**: yes
-
-### Phase 3: CPU Release Verification and Evaluation
-
-**Goal**: The completed migration is demonstrably practical on the target Lenovo ThinkPad L380 CPU and reproducible across supported environments, with honest internal measurement evaluation that cannot alter production customer values.
-**Depends on**: Phase 2
-**Requirements**: TRUTH-04, PERF-01, QA-01, QA-02
-**Success Criteria** (what must be TRUE):
-
-  1. An internal evaluation run compares provider output with consented tape-measurement references and reports per-measurement error without changing production customer measurements or turning the evaluation into an unqualified customer accuracy claim.
-  2. Two-view processing bounds decoded image dimensions, memory use, and concurrency and runs on the target Lenovo ThinkPad L380 without CUDA; provider configuration, local startup, and resource expectations are documented for the supported path.
-  3. Automated checks cover measurement normalization, nullable confidence and accuracy behavior, validation failures, guide geometry and calibration, persistence and retry promotion, backend boundaries, privacy, and the accuracy-validation limitation.
-  4. A clean checkout can reproduce the documented typecheck, unit/Vitest tests, Python tests, and supported production builds for the local and hosted paths.
-
+  1. A completed scan's result payload includes overlay geometry over the Node runtime.
+  2. Re-opening a completed scan returns the same overlay geometry without reprocessing (persisted).
+  3. The PHP/XAMPP runtime returns the same response shape (overlay may be empty).
+  4. The client can retrieve the customer's front/side photos for display.
 **Plans**: TBD
 
-## Requirement Coverage
+Plans:
+- [ ] 02-01: Normalize + forward overlay geometry in `server/aiService.mjs` / `server/index.mjs`; add client types
+- [ ] 02-02: Persist overlay geometry with the scan result (schema + read/write)
+- [ ] 02-03: Mirror the response shape in `xampp/api/index.php` (empty overlay allowed)
 
-Every v1 requirement is assigned to exactly one phase.
+### Phase 3: Real-photo overlay result view
+**Goal**: The results screen defaults to the customer's real photo with each measurement drawn as a labeled guide line at its position, each on its best view, scaling correctly on desktop and mobile.
+**Depends on**: Phase 2
+**Requirements**: OVL-01, OVL-02, OVL-03, OVL-04, OVL-05, PAR-02
+**Success Criteria** (what must be TRUE):
+  1. Opening a completed scan shows the real photo (not the mannequin) by default.
+  2. Each measurement appears as a guide line at its correct body position, labeled with name + value + unit in the user's unit preference.
+  3. Each measurement is shown on whichever view (front/side) reads clearest.
+  4. Lines stay aligned to the body as the photo scales on desktop (centered ~480px) and mobile.
+  5. If overlay geometry is missing, the view falls back to photo + measurement list without crashing.
+**Plans**: TBD
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| TRUTH-01 | Phase 1 | Implemented locally; hosted gate pending |
-| TRUTH-02 | Phase 1 | Implemented locally |
-| TRUTH-03 | Phase 1 | Implemented locally |
-| TRUTH-04 | Phase 3 | Pending |
-| VALID-01 | Phase 1 | Implemented locally |
-| VALID-02 | Phase 1 | Implemented locally |
-| GEOM-01 | Phase 1 | Implemented locally |
-| GEOM-02 | Phase 1 | Implemented locally |
-| GEOM-03 | Phase 2 | Implemented |
-| LIFE-01 | Phase 1 | Implemented locally; hosted gate pending |
-| LIFE-02 | Phase 1 | Implemented locally |
-| LIFE-03 | Phase 1 | Implemented locally |
-| LIFE-04 | Phase 1 | Implemented locally |
-| BACK-01 | Phase 2 | Implemented |
-| BACK-02 | Phase 2 | Implemented |
-| PRIV-01 | Phase 1 | Implemented locally |
-| PRIV-02 | Phase 1 | Implemented locally |
-| PERF-01 | Phase 3 | Pending |
-| QA-01 | Phase 3 | Pending |
-| QA-02 | Phase 3 | Pending |
+Plans:
+- [ ] 03-01: Photo + overlay component (SVG/canvas) mapping normalized coords to displayed pixels with responsive scaling
+- [ ] 03-02: Best-view-per-measurement selection + labels + unit formatting + graceful fallback
 
-**Coverage**: 20/20 v1 requirements mapped; no orphaned or duplicate assignments.
+### Phase 4: 3D mannequin toggle + fallback
+**Goal**: The existing 3D mannequin is preserved as a toggleable alternate view; photo overlay stays the default.
+**Depends on**: Phase 3
+**Requirements**: OVL-06
+**Success Criteria** (what must be TRUE):
+  1. A toggle switches between the photo overlay view and the existing 3D mannequin view.
+  2. The 3D mannequin (with its existing measured guide lines) still renders when selected.
+  3. Photo overlay remains the default on load.
+**Plans**: TBD
+
+Plans:
+- [ ] 04-01: Add view toggle; gate the Three.js mannequin behind it; default to photo overlay
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3
+Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. End-to-End Truthful Scan Tracer | 2/2 | Complete    | 2026-09-02 |
-| 2. Cross-Runtime and Legacy Review Continuity | 4/4 | Complete    | 2026-09-03 |
-| 3. CPU Release Verification and Evaluation | 0/TBD | Not started | - |
+| 1. 2D overlay geometry in the AI service | 0/2 | Not started | - |
+| 2. Carry overlay through the contract | 0/3 | Not started | - |
+| 3. Real-photo overlay result view | 0/2 | Not started | - |
+| 4. 3D mannequin toggle + fallback | 0/1 | Not started | - |

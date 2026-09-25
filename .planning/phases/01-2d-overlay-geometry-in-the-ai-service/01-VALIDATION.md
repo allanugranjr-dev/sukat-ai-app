@@ -40,7 +40,10 @@ created: "2026-09-25"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| {N}-01-01 | 01 | 1 | PIPE-01 | — | Overlay lines carry normalized endpoints, view, and view pixel dims | unit | `cd ai-service && python -m pytest tests/test_overlay_geometry.py -q` | ❌ W0 | ⬜ pending |
+| 1-01-01 | 01 | 1 | PIPE-01, PIPE-02 | T-01-01 | Waist overlay line carries normalized [0,1] endpoints, view, kind, per-view dims; clamped/rounded at derivation | tracer/unit | `cd ai-service && python -m pytest tests/test_overlay_geometry.py::test_overlay_present_with_dims tests/test_silhouette_pipeline.py -q` | ❌ W0 | ⬜ pending |
+| 1-01-02 | 01 | 1 | PIPE-01, PIPE-02 | T-01-01, T-01-02 | All anchorable lines truthful; upper_arm + zero-width omitted; view from profile.view; single resolve; device cpu | unit | `cd ai-service && python -m pytest tests/test_overlay_geometry.py -q` | ❌ W0 | ⬜ pending |
+| 1-02-01 | 02 | 2 | PIPE-01, PIPE-03 | T-01-04, T-01-05 | Finite/[0,1]-bounded point validator; bounded sizes; extra=forbid; view-presence check | unit | `cd ai-service && python -m pytest tests/test_overlay_geometry.py -q` | ❌ W0 | ⬜ pending |
+| 1-02-02 | 02 | 2 | PIPE-03 | T-01-06 | Malformed overlay -> PipelineFailure INVALID_PROVIDER_RESULT/502, not a 500 | unit | `cd ai-service && python -m pytest tests/test_overlay_geometry.py tests/test_silhouette_pipeline.py -q` | ❌ W0 | ⬜ pending |
 
 *Planner + Nyquist auditor populate this table per task. Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
