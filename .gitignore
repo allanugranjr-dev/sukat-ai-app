@@ -1,18 +1,14 @@
 node_modules
 dist
 dist-node
-dist-mobile
 .env*
 !.env.example
-!.env.mobile
 .env
 .env.local
 .env.xampp.local
 .env.node.local
 xampp/storage/*
 !xampp/storage/.htaccess
-supabase/.temp/
-supabase/.branches/
 .DS_Store
 coverage
 

@@ -60,8 +60,4 @@ ai-service\.venv\Scripts\python.exe ai-service\scripts\system_check.py
 ai-service\.venv\Scripts\python.exe -m pytest -q ai-service\tests
 ```
 
-## CPU Release Contract
-
-See [docs/cpu-release.md](../docs/cpu-release.md) for the documented resource contract for the Lenovo ThinkPad L380 target, including the CPU bounds, configuration environment variables, and verification steps.
-
 The system check reports missing model assets clearly. Missing assets are expected until licensed checkpoints are installed and never cause a fabricated personalized result.

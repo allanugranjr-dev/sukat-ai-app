@@ -217,33 +217,6 @@ npm run xampp:deploy
 
 Open `http://localhost/bsit-sukat-ai/`. The deployment target is intentionally separate from any existing `C:\xampp\htdocs\sukatai` site. See `xampp/README.md` for admin-role setup and development mode.
 
-## Android mobile app (APK)
-
-The Android app is a Capacitor shell around the same React screens and API contracts. It keeps the camera/upload flow, responsive measurement viewer, Supabase Auth, private Storage, and role-based workrooms in one codebase.
-
-Before building for a phone, create `.env.mobile.local` from `.env.mobile.example` and provide the public Supabase URL and anon key. The mobile build uses the hosted Supabase runtime and the production invitation redirect; it must not point to `127.0.0.1` or `localhost`, because those addresses refer to the phone itself.
-
-```powershell
-Copy-Item .env.mobile.example .env.mobile.local
-# Edit .env.mobile.local with your public Supabase values.
-npm run mobile:apk
-```
-
-The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`. Install it on a connected Android phone with Android Studio, or with `adb install -r android/app/build/outputs/apk/debug/app-debug.apk`. Use `npm run mobile:run` when an emulator or USB-debugging device is available.
-
-The Android package id is `com.sukatai.app`. Before distributing it publicly, configure a release signing key, verify Supabase redirect URLs for the hosted app, deploy the required Edge Functions, and test camera permissions on a real device.
-
-## iOS mobile app
-
-The same Capacitor web app is also prepared for iOS with bundle id `com.sukatai.app`, light system bars, safe-area-aware layout, and camera/photo-library usage descriptions in `ios/App/App/Info.plist`. iOS packaging and signing require macOS with Xcode.
-
-```bash
-npm run mobile:sync:ios
-npm run mobile:open:ios
-```
-
-Run those commands on macOS, select an Apple development team in Xcode, and test the camera permission flow on a physical iPhone. The Windows checkout can typecheck and generate the iOS project, but cannot build or sign an iOS app without Xcode.
-
 ## Useful commands
 
 ```bash
@@ -253,7 +226,7 @@ npm test
 npm run build
 ```
 
-The tests cover scan navigation, upload/height guardrails, and measurement-to-model mapping. The production boundary is enforced by Supabase RLS, private Storage policies, and server-side Edge Function secrets. Before a release, run `npm run typecheck`, `npm test`, and the build command for the selected runtime (`npm run build:node`, `npm run build:supabase`, or `npm run build:xampp`).
+The tests cover scan navigation, upload/height guardrails, and measurement-to-model mapping. Before a release, run `npm run typecheck`, `npm test`, and the build command for the selected runtime (`npm run build:node` or `npm run build:xampp`).
 
 ## Image-based AI measurement service
 
