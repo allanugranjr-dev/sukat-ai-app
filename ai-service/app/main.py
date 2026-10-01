@@ -89,11 +89,11 @@ def _update_progress(scan_id: str, progress: int, message: str) -> None:
     )
 
 
-async def _run_scan(scan_id: str, images: dict[str, bytes], height_cm: float, request: Request) -> None:
+async def _run_scan(scan_id: str, images: dict[str, bytes], height_cm: float, request: Request, sex: str | None = None) -> None:
     async with scan_semaphore:
         _update_progress(scan_id, 10, "Starting private scan validation.")
         try:
-            result = await asyncio.to_thread(pipeline.process, scan_id, images, height_cm, lambda value, message: _update_progress(scan_id, value, message))
+            result = await asyncio.to_thread(pipeline.process, scan_id, images, height_cm, lambda value, message: _update_progress(scan_id, value, message), sex)
             stored_scans[scan_id] = _with_model_url(result, request)
         except PipelineFailure as error:
             current = stored_scans.get(scan_id)
@@ -186,6 +186,7 @@ async def create_body_scan(
     back_image: Annotated[UploadFile | None, File()] = None,
     height_cm: float | None = None,
     scan_id: str | None = None,
+    sex: str | None = None,
     _: None = Depends(_authorized),
 ) -> BodyScanResponse | JSONResponse:
     # Query parameters are accepted as a convenient curl/Node integration
@@ -197,6 +198,8 @@ async def create_body_scan(
             height_cm = float(str(form.get("height_cm")))
         except ValueError:
             height_cm = None
+    if not sex and form.get("sex") not in (None, ""):
+        sex = str(form.get("sex"))
     if not scan_id:
         supplied_scan_id = form.get("scan_id")
         scan_id = str(supplied_scan_id).strip() if supplied_scan_id else None
@@ -223,7 +226,7 @@ async def create_body_scan(
         processing_version="sukatai-anny-clad-v1",
     )
     stored_scans[resolved_scan_id] = queued
-    scan_tasks[resolved_scan_id] = asyncio.create_task(_run_scan(resolved_scan_id, payload, float(height_cm), request))
+    scan_tasks[resolved_scan_id] = asyncio.create_task(_run_scan(resolved_scan_id, payload, float(height_cm), request, sex))
     response = JSONResponse(status_code=202, content=_with_model_url(queued, request).model_dump(mode="json"))
     response.headers["Location"] = f"/api/v1/body-scan/{resolved_scan_id}/status"
     return response

@@ -67,6 +67,56 @@ function jsonError(string $message, int $status = 400): void
     exit;
 }
 
+// Per-client throttle for credential endpoints, mirroring the Node runtime's
+// 10-requests / 15-minute limiter so both backends resist sign-in brute-force
+// and OTP/enumeration bursts. State is a small JSON file per (action, client)
+// under the storage dir. REMOTE_ADDR is used directly: the client-supplied
+// X-Forwarded-For is not trusted unless a reverse proxy overwrites it, and the
+// XAMPP runtime is documented as a direct Apache deployment. Fails open on any
+// filesystem error so a storage hiccup can never lock out real users.
+function rateLimitGuard(string $action): void
+{
+    global $config;
+    $windowSeconds = 15 * 60;
+    $max = 10;
+    $client = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $dir = $config['storage_dir'] . DIRECTORY_SEPARATOR . 'ratelimit';
+    try {
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) return;
+        $file = $dir . DIRECTORY_SEPARATOR . hash('sha256', $action . ':' . $client) . '.json';
+        $now = time();
+        $handle = @fopen($file, 'c+');
+        if ($handle === false) return;
+        try {
+            @flock($handle, LOCK_EX);
+            $raw = stream_get_contents($handle);
+            $bucket = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+            if (!is_array($bucket) || !isset($bucket['reset_at']) || $now >= (int) $bucket['reset_at']) {
+                $bucket = ['count' => 0, 'reset_at' => $now + $windowSeconds];
+            }
+            $bucket['count'] = (int) $bucket['count'] + 1;
+            $limited = $bucket['count'] > $max;
+            rewind($handle);
+            ftruncate($handle, 0);
+            fwrite($handle, json_encode($bucket));
+            fflush($handle);
+        } finally {
+            @flock($handle, LOCK_UN);
+            @fclose($handle);
+        }
+        if ($limited) {
+            $retryAfter = max(1, (int) $bucket['reset_at'] - $now);
+            header('Retry-After: ' . $retryAfter);
+            throw new SukatApiException('Too many attempts. Please wait a few minutes and try again.', 429);
+        }
+    } catch (SukatApiException $e) {
+        throw $e;
+    } catch (Throwable $e) {
+        // Fail open: never let a storage error block a legitimate request.
+        return;
+    }
+}
+
 function database(): PDO
 {
     global $config;
@@ -252,6 +302,34 @@ function otpVerificationPayload(string $email, array $sendResult, string $code):
     return $p;
 }
 
+// Password-reset code, mirroring issueOtp/sendOtpEmail. Reuses reset_token_hash /
+// reset_expires_at for the hashed code + expiry and reset_attempts /
+// reset_last_sent_at for the 5-try lockout and 45s cooldown.
+function issueResetCode(string $userId): string
+{
+    $code = generateOtpCode();
+    $stmt = database()->prepare('UPDATE users SET reset_token_hash = ?, reset_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE), reset_attempts = 0, reset_last_sent_at = NOW() WHERE id = ?');
+    $stmt->execute([hash('sha256', $code), $userId]);
+    return $code;
+}
+
+function sendResetEmail(array $user, string $code): array
+{
+    global $config;
+    $smtp = $config['smtp'] ?? [];
+    $subject = 'Your SukatAI password reset code';
+    $text = "Hi,\n\nYour SukatAI password reset code is {$code}.\n\nThis code expires in 10 minutes. If you did not request a password reset, you can ignore this email and your password stays unchanged.\n\n- SukatAI";
+    $safeCode = htmlspecialchars($code, ENT_QUOTES, 'UTF-8');
+    $html = '<div style="font-family:Arial,Helvetica,sans-serif;color:#111;">'
+        . '<p>Hi,</p>'
+        . '<p>Your SukatAI password reset code is:</p>'
+        . '<p style="font-size:28px;font-weight:bold;letter-spacing:4px;">' . $safeCode . '</p>'
+        . '<p>This code expires in 10 minutes. If you did not request a password reset, you can ignore this email and your password stays unchanged.</p>'
+        . '<p>&mdash; SukatAI</p>'
+        . '</div>';
+    return sendMailViaSmtp($smtp, $user['email'], $subject, $text, $html);
+}
+
 function sessionPayload(array $user): array
 {
     $token = 'xampp-session';
@@ -348,6 +426,7 @@ function scanResponse(array $row): array
         'status' => $row['status'],
         'height_value' => $row['height_value'] === null ? null : (float) $row['height_value'],
         'height_unit' => $row['height_unit'],
+        'sex' => $row['sex'] ?? 'neutral',
         'consent_at' => $row['consent_at'],
         'capture_source' => $row['capture_source'],
         'processing_provider' => $row['processing_provider'],
@@ -688,8 +767,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST' && !in_array($action, $getA
     exit;
 }
 $processingScanId = null;
+// Throttle credential endpoints before doing any work, matching the Node
+// runtime's rateLimitedActions set.
+$rateLimitedActions = ['sign_in', 'sign_up', 'password_reset_request', 'password_reset_confirm', 'verify_otp', 'resend_otp'];
 
 try {
+    if (in_array($action, $rateLimitedActions, true)) {
+        rateLimitGuard($action);
+    }
     switch ($action) {
         case 'health':
             database()->query('SELECT 1');
@@ -780,15 +865,19 @@ try {
             $statement = database()->prepare('SELECT id, email_verified, (otp_last_sent_at IS NULL OR otp_last_sent_at < DATE_SUB(NOW(), INTERVAL 45 SECOND)) AS can_send FROM users WHERE email = ? LIMIT 1');
             $statement->execute([$email]);
             $row = $statement->fetch();
+            // Anti-enumeration: return the SAME fixed shape regardless of whether
+            // the account exists, is verified, or is in cooldown. Only dev_code
+            // (already gated to a non-production unconfigured mailer) is added.
+            $response = ['ok' => true, 'verification' => ['email' => $email, 'expires_in_seconds' => 600, 'delivery' => 'accepted']];
             if ($row && empty($row['email_verified']) && !empty($row['can_send'])) {
                 $statement = database()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
                 $statement->execute([$row['id']]);
                 $user = $statement->fetch();
                 $code = issueOtp($row['id']);
                 $send = sendOtpEmail($user, $code);
-                jsonResponse(['ok' => true, 'verification' => otpVerificationPayload($email, $send, $code)]);
+                if (devCodeAllowed($send)) $response['verification']['dev_code'] = $code;
             }
-            jsonResponse(['ok' => true, 'verification' => ['email' => $email, 'expires_in_seconds' => 600, 'delivery' => 'throttled']]);
+            jsonResponse($response);
         }
 
         case 'sign_out':
@@ -820,18 +909,66 @@ try {
         case 'password_reset_request': {
             $data = requestData();
             $email = strtolower(stringInput($data, 'email', '') ?? '');
-            $statement = database()->prepare('SELECT id FROM users WHERE email = ? LIMIT 1');
+            $statement = database()->prepare('SELECT id, (reset_last_sent_at IS NULL OR reset_last_sent_at < DATE_SUB(NOW(), INTERVAL 45 SECOND)) AS can_send FROM users WHERE email = ? LIMIT 1');
             $statement->execute([$email]);
-            $user = $statement->fetch();
-            if ($user) {
-                $token = bin2hex(random_bytes(24));
-                $statement = database()->prepare('UPDATE users SET reset_token_hash = ?, reset_expires_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = ?');
-                $statement->execute([hash('sha256', $token), $user['id']]);
+            $row = $statement->fetch();
+            // Anti-enumeration: same fixed response shape whether or not the
+            // account exists or is in cooldown. Only dev_code (gated to a
+            // non-production unconfigured mailer) is ever added.
+            $response = ['ok' => true, 'verification' => ['email' => $email, 'expires_in_seconds' => 600, 'delivery' => 'accepted']];
+            if ($row && !empty($row['can_send'])) {
+                $statement = database()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
+                $statement->execute([$row['id']]);
+                $user = $statement->fetch();
+                $code = issueResetCode($row['id']);
+                $send = sendResetEmail($user, $code);
+                if (devCodeAllowed($send)) $response['verification']['dev_code'] = $code;
             }
-            jsonResponse(true);
+            jsonResponse($response);
+        }
+
+        case 'password_reset_confirm': {
+            $data = requestData();
+            $email = strtolower(stringInput($data, 'email', '') ?? '');
+            $code = trim(stringInput($data, 'code', '') ?? '');
+            $password = stringInput($data, 'password', '') ?? '';
+            // Reject empty code/email before touching state so a blank submission
+            // does not burn a lockout attempt (matches verify_otp).
+            if ($email === '' || $code === '') throw new SukatApiException('Enter your email and reset code.', 400);
+            if (strlen($password) < 8) throw new SukatApiException('Use a password with at least 8 characters.', 400);
+            $statement = database()->prepare('SELECT id, reset_token_hash, reset_attempts, (reset_expires_at > NOW()) AS not_expired FROM users WHERE email = ? LIMIT 1');
+            $statement->execute([$email]);
+            $row = $statement->fetch();
+            if (!$row || empty($row['reset_token_hash'])) throw new SukatApiException('Request a new reset code.', 400);
+            if (empty($row['not_expired'])) {
+                $statement = database()->prepare('UPDATE users SET reset_token_hash = NULL, reset_expires_at = NULL WHERE id = ?');
+                $statement->execute([$row['id']]);
+                throw new SukatApiException('That code has expired. Request a new one.', 400);
+            }
+            if ((int) $row['reset_attempts'] >= 5) throw new SukatApiException('Too many incorrect attempts. Request a new code.', 429);
+            if (!hash_equals((string) $row['reset_token_hash'], hash('sha256', $code))) {
+                $statement = database()->prepare('UPDATE users SET reset_attempts = reset_attempts + 1 WHERE id = ?');
+                $statement->execute([$row['id']]);
+                throw new SukatApiException('That code is incorrect.', 400);
+            }
+            // Correct code: set new password, clear reset state, and mark the email
+            // verified (a valid reset code proves mailbox control) so a
+            // never-verified account is not left unable to sign in.
+            $statement = database()->prepare('UPDATE users SET password_hash = ?, reset_token_hash = NULL, reset_expires_at = NULL, reset_attempts = 0, reset_last_sent_at = NULL, email_verified = 1, verified_at = COALESCE(verified_at, NOW()), otp_hash = NULL, otp_expires_at = NULL, updated_at = NOW() WHERE id = ?');
+            $statement->execute([password_hash($password, PASSWORD_DEFAULT), $row['id']]);
+            $statement = database()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
+            $statement->execute([$row['id']]);
+            $user = $statement->fetch();
+            // Sign the user in on this device with a fresh session id.
+            session_regenerate_id(true);
+            $_SESSION['user_id'] = $row['id'];
+            jsonResponse(['session' => sessionPayload($user), 'user' => publicUser($user)]);
         }
 
         case 'password_update': {
+            // Session-based password change (dressmaker invitation acceptance).
+            // The forgot-password path is password_reset_request +
+            // password_reset_confirm.
             $user = requireUser();
             $data = requestData();
             $password = stringInput($data, 'password', '') ?? '';
@@ -997,7 +1134,7 @@ try {
             $isCustomer = $scan['customer_id'] === $user['id'];
             if (!$isCustomer) requireOrganizationStaff($user, $scan['organization_id']);
             $suppliedFields = array_values(array_diff(array_keys($data), ['scan_id']));
-            $allowedFields = $isCustomer ? ['height_value', 'height_unit', 'status', 'capture_source', 'failure_reason'] : ['status'];
+            $allowedFields = $isCustomer ? ['height_value', 'height_unit', 'sex', 'status', 'capture_source', 'failure_reason'] : ['status'];
             foreach ($suppliedFields as $field) {
                 if (!in_array($field, $allowedFields, true)) throw new SukatApiException($isCustomer ? 'The scan update contains unsupported fields.' : 'Dressmakers can only update the review status of a scan.', 403);
             }
@@ -1007,9 +1144,10 @@ try {
                 $fields[] = 'height_value = ?';
                 $values[] = $data['height_value'] === null || $data['height_value'] === '' ? null : (float) $data['height_value'];
             }
-            foreach (['height_unit', 'status', 'capture_source', 'failure_reason'] as $field) {
+            foreach (['height_unit', 'sex', 'status', 'capture_source', 'failure_reason'] as $field) {
                 if (array_key_exists($field, $data)) {
                     $value = stringInput($data, $field);
+                    if ($field === 'sex' && !in_array($value, ['male', 'female', 'neutral'], true)) throw new SukatApiException('The body type is invalid.', 400);
                     if ($field === 'status' && !in_array($value, ['draft', 'uploaded', 'processing_queued', 'processing', 'ready_to_share', 'ready_for_review', 'verified', 'needs_recapture', 'failed'], true)) throw new SukatApiException('The scan status is invalid.', 400);
                     if ($field === 'status' && $isCustomer && $value === 'processing_queued' && $scan['status'] === 'processing') throw new SukatApiException('This scan is already being processed. Wait for the current result or retry it from the processing screen.', 409);
                     if ($field === 'status' && $isCustomer && $value === 'ready_for_review' && $value !== $scan['status'] && $scan['status'] !== 'ready_to_share') throw new SukatApiException('This result can only be shared after processing is complete.', 403);

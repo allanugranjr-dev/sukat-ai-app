@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import bcrypt from "bcryptjs";
 import express from "express";
 import multer from "multer";
+import nodemailer from "nodemailer";
 import { Server } from "socket.io";
 
 import { canonicalAppUrl, config } from "./config.mjs";
@@ -68,11 +69,19 @@ setInterval(() => {
   }
 }, authRateLimit.windowMs).unref?.();
 
-const rateLimitedActions = new Set(["sign_in", "sign_up", "password_reset_request", "verify_otp", "resend_otp"]);
+const rateLimitedActions = new Set(["sign_in", "sign_up", "password_reset_request", "password_reset_confirm", "verify_otp", "resend_otp"]);
 
 function clientIp(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
-  return forwarded || req.socket?.remoteAddress || "unknown";
+  // Only honor the client-supplied X-Forwarded-For when a trusted proxy is
+  // configured; otherwise it is attacker-controlled and would let a client mint
+  // a fresh rate-limit bucket per request by rotating the header. When trusted,
+  // use the LAST hop the proxy appended (the real client as the proxy saw it),
+  // not the first, which a client can prepend.
+  if (config.trustProxy) {
+    const chain = String(req.headers["x-forwarded-for"] ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    if (chain.length > 0) return chain[chain.length - 1];
+  }
+  return req.socket?.remoteAddress || "unknown";
 }
 
 // A fixed bcrypt hash used to spend the same time on a missing account as on a
@@ -224,6 +233,27 @@ async function sendOtpEmail(user, code) {
   return await sendEmail({ to: user.email, subject, text, html });
 }
 
+// Password-reset code. Reuses the long-existing reset_token_hash / reset_expires_at
+// columns to store the hashed code + expiry, plus reset_attempts / reset_last_sent_at
+// for the same 5-try lockout and 45s cooldown the verification OTP uses.
+async function issueResetCode(userId) {
+  const code = generateOtpCode();
+  await execute(
+    "UPDATE users SET reset_token_hash = ?, reset_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE), reset_attempts = 0, reset_last_sent_at = UTC_TIMESTAMP() WHERE id = ?",
+    [hashToken(code), userId],
+  );
+  return code;
+}
+
+async function sendResetEmail(user, code) {
+  const subject = "Your SukatAI password reset code";
+  const firstName = escapeHtml(user.first_name ?? "");
+  const greetingName = firstName ? ` ${firstName}` : "";
+  const text = `Hi${user.first_name ? ` ${user.first_name}` : ""},\n\nYour SukatAI password reset code is ${code}. It expires in 10 minutes.\n\nIf you did not request a password reset, you can ignore this email and your password stays unchanged.`;
+  const html = `<p>Hi${greetingName},</p><p>Your SukatAI password reset code is <strong style="font-size:20px;letter-spacing:2px">${code}</strong>.</p><p>It expires in 10 minutes.</p><p>If you did not request a password reset, you can ignore this email and your password stays unchanged.</p>`;
+  return await sendEmail({ to: user.email, subject, text, html });
+}
+
 function devCodeAllowed(sendResult) {
   return !config.isProduction && sendResult && sendResult.status === "not_configured";
 }
@@ -263,8 +293,49 @@ function providerForChannel(channel) {
   return channel === "email" ? config.notifications.emailProvider : config.notifications.smsProvider;
 }
 
+// The SMTP transport is created lazily and cached: nodemailer pools the
+// connection, so re-creating it per send would defeat keep-alive and re-auth
+// against Gmail on every OTP email.
+let smtpTransport = null;
+function smtpTransporter() {
+  if (smtpTransport) return smtpTransport;
+  const { smtp } = config.notifications;
+  smtpTransport = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.secure,
+    auth: { user: smtp.user, pass: smtp.pass },
+  });
+  return smtpTransport;
+}
+
+// Gmail rejects a From that is not the authenticated mailbox, so when the
+// operator has not set an explicit SUKATAI_EMAIL_FROM (the config default is a
+// Resend sandbox address) fall back to the SMTP username with a display name.
+function smtpFromAddress() {
+  const { emailFrom, smtp } = config.notifications;
+  if (emailFrom && !emailFrom.includes("resend.dev")) return emailFrom;
+  return `SukatAI <${smtp.user}>`;
+}
+
+async function sendEmailViaSmtp({ to, subject, text, html }) {
+  const { smtp } = config.notifications;
+  if (!smtp.host || !smtp.user || !smtp.pass) {
+    return { status: "not_configured", provider: "smtp", error: "SMTP email configuration is incomplete." };
+  }
+  try {
+    const info = await smtpTransporter().sendMail({ from: smtpFromAddress(), to, subject, text, html });
+    return { status: "sent", provider: "smtp", providerMessageId: typeof info?.messageId === "string" ? info.messageId : null, error: null };
+  } catch (error) {
+    return { status: "failed", provider: "smtp", error: `Email delivery failed: ${error instanceof Error ? error.message.slice(0, 260) : "smtp error"}` };
+  }
+}
+
 async function sendEmail({ to, subject, text, html }) {
   const { emailProvider, emailApiKey, emailFrom } = config.notifications;
+  if (emailProvider === "smtp") {
+    return sendEmailViaSmtp({ to, subject, text, html });
+  }
   if (emailProvider !== "resend") {
     return { status: "not_configured", provider: emailProvider || "console", error: "Email delivery is not configured." };
   }
@@ -504,6 +575,7 @@ function scanResponse(scan) {
     status: scan.status,
     height_value: scan.height_value === null ? null : Number(scan.height_value),
     height_unit: scan.height_unit,
+    sex: scan.sex ?? "neutral",
     consent_at: isoDate(scan.consent_at),
     capture_source: scan.capture_source,
     processing_provider: scan.processing_provider,
@@ -1106,6 +1178,9 @@ async function handleAction(req, res) {
     case "verify_otp": {
       const email = (stringInput(data, "email", "") ?? "").toLowerCase();
       const code = (stringInput(data, "code", "") ?? "").trim();
+      // Reject empty input before touching state so a blank submission does not
+      // consume one of the 5 lockout attempts (matches the PHP mirror).
+      if (!email || !code) throw new ApiError("Enter your email and verification code.", 400);
       const fresh = await row(
         "SELECT id, otp_hash, otp_attempts, (otp_expires_at > UTC_TIMESTAMP()) AS not_expired FROM users WHERE email = ? LIMIT 1",
         [email],
@@ -1135,15 +1210,21 @@ async function handleAction(req, res) {
         "SELECT id, email_verified, (otp_last_sent_at IS NULL OR otp_last_sent_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 45 SECOND)) AS can_send FROM users WHERE email = ? LIMIT 1",
         [email],
       );
-      // Anti-enumeration: always return the same success shape. Only actually
-      // re-issue when the account exists, is unverified, and the cooldown passed.
+      // Anti-enumeration: the response must NOT reveal whether the account
+      // exists, is already verified, or is in cooldown. Re-issue only when the
+      // account exists, is unverified, and the cooldown passed, but always
+      // return the SAME fixed shape ("delivery: accepted") regardless. The only
+      // extra field is dev_code, which is already hard-gated to a non-production
+      // build with an unconfigured mailer, where the code is shown on screen by
+      // design and enumeration is not a concern.
+      const response = { ok: true, verification: { email, expires_in_seconds: 600, delivery: "accepted" } };
       if (candidate && !candidate.email_verified && candidate.can_send) {
         const user = await row("SELECT * FROM users WHERE id = ? LIMIT 1", [candidate.id]);
         const code = await issueOtp(user.id);
         const send = await sendOtpEmail(user, code);
-        return sendData(res, { ok: true, verification: otpVerificationPayload(email, send, code) });
+        if (devCodeAllowed(send)) response.verification.dev_code = code;
       }
-      return sendData(res, { ok: true, verification: { email, expires_in_seconds: 600, delivery: "throttled" } });
+      return sendData(res, response);
     }
 
     case "sign_out": {
@@ -1172,15 +1253,66 @@ async function handleAction(req, res) {
 
     case "password_reset_request": {
       const email = (stringInput(data, "email", "") ?? "").toLowerCase();
-      const user = await row("SELECT id FROM users WHERE email = ? LIMIT 1", [email]);
-      if (user) {
-        const token = randomBytes(24).toString("hex");
-        await execute("UPDATE users SET reset_token_hash = ?, reset_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 HOUR) WHERE id = ?", [hashToken(token), user.id]);
+      const candidate = await row(
+        "SELECT id, (reset_last_sent_at IS NULL OR reset_last_sent_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 45 SECOND)) AS can_send FROM users WHERE email = ? LIMIT 1",
+        [email],
+      );
+      // Anti-enumeration: always return the same fixed shape whether or not the
+      // account exists or is in cooldown. A code is issued + emailed only for a
+      // real account past its 45s cooldown. dev_code is hard-gated to a
+      // non-production build with an unconfigured mailer (where the reset code is
+      // shown on screen by design, so enumeration is moot).
+      const response = { ok: true, verification: { email, expires_in_seconds: 600, delivery: "accepted" } };
+      if (candidate && candidate.can_send) {
+        const user = await row("SELECT * FROM users WHERE id = ? LIMIT 1", [candidate.id]);
+        const code = await issueResetCode(user.id);
+        const send = await sendResetEmail(user, code);
+        if (devCodeAllowed(send)) response.verification.dev_code = code;
       }
-      return sendData(res, true);
+      return sendData(res, response);
+    }
+
+    case "password_reset_confirm": {
+      const email = (stringInput(data, "email", "") ?? "").toLowerCase();
+      const code = (stringInput(data, "code", "") ?? "").trim();
+      const password = stringInput(data, "password", "") ?? "";
+      // Reject empty code/email before touching state so a blank submission does
+      // not consume a lockout attempt (matches verify_otp and the PHP mirror).
+      if (!email || !code) throw new ApiError("Enter your email and reset code.", 400);
+      if (password.length < 8) throw new ApiError("Use a password with at least 8 characters.", 400);
+      const fresh = await row(
+        "SELECT id, reset_token_hash, reset_attempts, (reset_expires_at > UTC_TIMESTAMP()) AS not_expired FROM users WHERE email = ? LIMIT 1",
+        [email],
+      );
+      if (!fresh || !fresh.reset_token_hash) throw new ApiError("Request a new reset code.", 400);
+      if (!fresh.not_expired) {
+        await execute("UPDATE users SET reset_token_hash = NULL, reset_expires_at = NULL WHERE id = ?", [fresh.id]);
+        throw new ApiError("That code has expired. Request a new one.", 400);
+      }
+      if (fresh.reset_attempts >= 5) throw new ApiError("Too many incorrect attempts. Request a new code.", 429);
+      if (hashToken(code) !== fresh.reset_token_hash) {
+        await execute("UPDATE users SET reset_attempts = reset_attempts + 1 WHERE id = ?", [fresh.id]);
+        throw new ApiError("That code is incorrect.", 400);
+      }
+      // Correct code: set the new password, clear the reset state, and — since a
+      // verified reset code proves control of the mailbox — also mark the email
+      // verified so a never-verified account is not left unable to sign in.
+      await execute(
+        "UPDATE users SET password_hash = ?, reset_token_hash = NULL, reset_expires_at = NULL, reset_attempts = 0, reset_last_sent_at = NULL, email_verified = 1, verified_at = COALESCE(verified_at, UTC_TIMESTAMP()), otp_hash = NULL, otp_expires_at = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ?",
+        [await bcrypt.hash(password, 12), fresh.id],
+      );
+      // Invalidate every existing session for this account, then mint a fresh one
+      // so a reset both signs the user in and logs out any other device.
+      await execute("DELETE FROM sessions WHERE user_id = ?", [fresh.id]);
+      const user = await row("SELECT * FROM users WHERE id = ? LIMIT 1", [fresh.id]);
+      await createSession(res, fresh.id);
+      return sendData(res, { session: sessionPayload(user), user: publicUser(user) });
     }
 
     case "password_update": {
+      // Session-based password change (used by the dressmaker invitation
+      // acceptance flow, where the invitee is already signed in). The
+      // forgot-password path is password_reset_request + password_reset_confirm.
       const user = await requireUser(req);
       const password = stringInput(data, "password", "") ?? "";
       if (password.length < 8) throw new ApiError("Use a password with at least 8 characters.", 400);
@@ -1302,7 +1434,7 @@ async function handleAction(req, res) {
       const isCustomer = scan.customer_id === user.id;
       if (!isCustomer) requireOrganizationStaff(user, scan.organization_id);
       const suppliedFields = Object.keys(data).filter((field) => field !== "scan_id");
-      const allowedFields = isCustomer ? ["height_value", "height_unit", "status", "capture_source", "failure_reason"] : ["status"];
+      const allowedFields = isCustomer ? ["height_value", "height_unit", "sex", "status", "capture_source", "failure_reason"] : ["status"];
       if (suppliedFields.some((field) => !allowedFields.includes(field))) {
         throw new ApiError(isCustomer ? "The scan update contains unsupported fields." : "Dressmakers can only update the review status of a scan.", 403);
       }
@@ -1316,6 +1448,11 @@ async function handleAction(req, res) {
         const value = stringInput(data, "height_unit");
         if (!['cm', 'ftin'].includes(value)) throw new ApiError("The height unit is invalid.", 400);
         fields.push("height_unit = ?"); values.push(value);
+      }
+      if (Object.prototype.hasOwnProperty.call(data, "sex")) {
+        const value = stringInput(data, "sex");
+        if (!['male', 'female', 'neutral'].includes(value)) throw new ApiError("The body type is invalid.", 400);
+        fields.push("sex = ?"); values.push(value);
       }
       for (const field of ["status", "capture_source", "failure_reason"]) {
         if (!Object.prototype.hasOwnProperty.call(data, field)) continue;

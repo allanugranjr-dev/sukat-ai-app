@@ -67,7 +67,7 @@ def validate_image(data: bytes, view: str, max_upload_bytes: int, max_image_long
     if width > MAX_DIMENSION or height > MAX_DIMENSION:
         issues.append(ValidationIssue(code="IMAGE_DIMENSIONS_INVALID", message=f"The {view} image dimensions are too large.", view=view))
     if width > 0 and height > 0 and width / height > 2.4:
-        issues.append(ValidationIssue(code="FULL_BODY_FRAME_UNLIKELY", message=f"The {view} image is unusually wide; use a portrait frame with the whole body visible.", view=view))
+        issues.append(ValidationIssue(code="FULL_BODY_FRAME_UNLIKELY", message=f"The {view} image is unusually wide; use a portrait frame with the full body or upper body visible.", view=view))
     if _sharpness_score(image) < 7:
         issues.append(ValidationIssue(code="IMAGE_TOO_BLURRY", message=f"The {view} image is too blurry to validate. Retake it with the camera steady.", view=view))
     if any(issue.severity == "error" for issue in issues):
@@ -110,7 +110,7 @@ def validate_views(
     validated: dict[str, ValidatedImage] = {}
     for view in required_views:
         if view not in images or not images[view]:
-            issues.append(ValidationIssue(code="IMAGE_REQUIRED", message=f"A {view} full-body image is required.", view=view))
+            issues.append(ValidationIssue(code="IMAGE_REQUIRED", message=f"A {view} scan image is required.", view=view))
             continue
         try:
             validated[view] = validate_image(images[view], view, max_upload_bytes, max_image_long_edge)

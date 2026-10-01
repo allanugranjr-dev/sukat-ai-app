@@ -320,7 +320,8 @@ def _pose_grabcut_mask(image: Image.Image, pose: PoseObservation) -> np.ndarray 
     top = max(1, int(all_y.min()) - margin_y)
     right = min(width - 2, int(all_x.max()) + margin_x)
     bottom = min(height - 2, int(all_y.max()) + margin_y)
-    if right - left < width * 0.06 or bottom - top < height * 0.35:
+    min_span = height * (0.20 if getattr(pose, "coverage", "full_body") == "half_body" else 0.35)
+    if right - left < width * 0.05 or bottom - top < min_span:
         return None
 
     mask = np.full((height, width), cv2.GC_BGD, dtype=np.uint8)
@@ -365,7 +366,7 @@ def _pose_grabcut_mask(image: Image.Image, pose: PoseObservation) -> np.ndarray 
     result = cv2.morphologyEx(result.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=1).astype(bool)
     result = _clean_mask(result)
     ys, _ = np.where(result)
-    if ys.size < 100 or int(ys.max()) - int(ys.min()) + 1 < height * 0.35:
+    if ys.size < 100 or int(ys.max()) - int(ys.min()) + 1 < min_span:
         return None
     return result
 
@@ -487,6 +488,50 @@ def extract_silhouette_profile(data: bytes, view: str, pose: PoseObservation | N
         runs.append((start, previous))
         nearest_start, nearest_end = min(runs, key=lambda run: abs(((run[0] + run[1]) / 2.0) - body_center))
         center[image_row - top] = float(nearest_end - nearest_start + 1)
+    # Check if this silhouette represents a half-body / upper-body scan that requires
+    # lower-body anthropometric synthesis
+    is_half_body = (
+        (pose is not None and getattr(pose, "coverage", "full_body") == "half_body")
+        or (
+            pose is not None
+            and getattr(pose, "estimated_full_height_fraction", None) is not None
+            and height < pose.estimated_full_height_fraction * image.height * 0.88
+        )
+    )
+    if is_half_body and pose is not None and getattr(pose, "estimated_full_height_fraction", None) is not None:
+        target_full_height = int(round(pose.estimated_full_height_fraction * image.height))
+        visible_height = height
+        if target_full_height > visible_height:
+            new_bottom = top + target_full_height - 1
+            extended_full = np.zeros(target_full_height, dtype=np.float32)
+            extended_center = np.zeros(target_full_height, dtype=np.float32)
+            extended_full[:visible_height] = full
+            extended_center[:visible_height] = center
+
+            tail_valid = center[max(0, visible_height - 10):visible_height]
+            tail_valid = tail_valid[tail_valid > 0]
+            boundary_width = float(np.median(tail_valid)) if tail_valid.size > 0 else float(np.mean(center[-1:]))
+
+            boundary_fraction = (new_bottom - bottom) / float(max(1, target_full_height - 1))
+            prior_cm_at_boundary = _prior_diameter_cm(boundary_fraction, view)
+            px_per_cm = target_full_height / 170.0
+            expected_boundary_px = prior_cm_at_boundary * px_per_cm
+            scale_correction = boundary_width / max(1.0, expected_boundary_px) if boundary_width > 0 else 1.0
+            scale_correction = float(np.clip(scale_correction, 0.70, 1.40))
+
+            for row in range(bottom + 1, new_bottom + 1):
+                idx = row - top
+                fraction_from_feet = (new_bottom - row) / float(max(1, target_full_height - 1))
+                prior_cm = _prior_diameter_cm(fraction_from_feet, view)
+                synth_px = max(2.0, prior_cm * px_per_cm * scale_correction)
+                extended_full[idx] = synth_px
+                extended_center[idx] = synth_px
+
+            full = extended_full
+            center = extended_center
+            bottom = new_bottom
+            mask_source += "+half-body-extrapolation"
+
     return SilhouetteProfile(
         view=view,
         row_full_width=full,
@@ -556,43 +601,65 @@ def build_calibrated_profile_mesh(
     fractions: Iterable[float] | None = None,
     segments: int = 28,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Create a coarse watertight body volume from the two calibrated profiles."""
+    """Create a calibrated anatomical body volume from the two profiles."""
 
     if not np.isfinite(height_cm) or height_cm <= 0:
         raise ReconstructionError("A positive height is required to calibrate the body mesh.")
-    levels = list(fractions or np.linspace(0.0, 1.0, 42))
-    vertices: list[list[float]] = []
-    faces: list[list[int]] = []
-    for fraction in levels:
-        use_full = fraction > 0.76 or fraction < 0.09
-        front_width = _profile_width(front, fraction, height_cm, center=not use_full)
-        side_depth = _profile_width(side, fraction, height_cm, center=not use_full)
-        if front_width <= 0:
-            front_width = max(4.0, height_cm * 0.025)
-        if side_depth <= 0:
-            side_depth = max(3.0, front_width * 0.42)
-        radius_x = max(1.2, front_width / 2.0)
-        radius_z = max(1.0, side_depth / 2.0)
-        y = float(fraction * height_cm)
+    try:
+        from app.measurements.tailoring import tailoring_measurements
+        from app.reconstruction.mesh_morpher import morph_canonical_human_body
+
+        estimated = tailoring_measurements(front, side, height_cm)
+        by_key = {item["key"]: float(item["value"]) for item in estimated if item.get("value")}
+        aliases = {
+            "chest_circumference": "bust_cm",
+            "waist_circumference": "waist_cm",
+            "hip_circumference": "hip_cm",
+            "thigh_left_circumference": "thigh_cm",
+            "upper_arm": "upperarm_cm",
+            "shoulder": "shoulder_width_cm",
+            "inseam": "inseam_cm",
+        }
+        targets = {"height_cm": float(height_cm)}
+        targets.update({target: by_key[source] for source, target in aliases.items() if source in by_key})
+        verts, faces = morph_canonical_human_body(targets, height_cm)
+        # Convert Z-up meters to Y-up centimeters for raw profile callers
+        verts_cm = np.column_stack((verts[:, 0] * 100.0, verts[:, 2] * 100.0, verts[:, 1] * 100.0)).astype(np.float32)
+        return verts_cm, faces.astype(np.int32)
+    except Exception:
+        levels = list(fractions or np.linspace(0.0, 1.0, 42))
+        vertices: list[list[float]] = []
+        faces_list: list[list[int]] = []
+        for fraction in levels:
+            use_full = fraction > 0.76 or fraction < 0.09
+            front_width = _profile_width(front, fraction, height_cm, center=not use_full)
+            side_depth = _profile_width(side, fraction, height_cm, center=not use_full)
+            if front_width <= 0:
+                front_width = max(4.0, height_cm * 0.025)
+            if side_depth <= 0:
+                side_depth = max(3.0, front_width * 0.42)
+            radius_x = max(1.2, front_width / 2.0)
+            radius_z = max(1.0, side_depth / 2.0)
+            y = float(fraction * height_cm)
+            for segment in range(segments):
+                angle = 2.0 * np.pi * segment / segments
+                vertices.append([radius_x * np.cos(angle), y, radius_z * np.sin(angle)])
+        for level in range(len(levels) - 1):
+            for segment in range(segments):
+                current = level * segments + segment
+                next_segment = level * segments + (segment + 1) % segments
+                upper = (level + 1) * segments + segment
+                upper_next = (level + 1) * segments + (segment + 1) % segments
+                faces_list.extend([[current, upper, next_segment], [next_segment, upper, upper_next]])
+        bottom_center = len(vertices)
+        top_center = bottom_center + 1
+        vertices.extend([[0.0, 0.0, 0.0], [0.0, height_cm, 0.0]])
         for segment in range(segments):
-            angle = 2.0 * np.pi * segment / segments
-            vertices.append([radius_x * np.cos(angle), y, radius_z * np.sin(angle)])
-    for level in range(len(levels) - 1):
-        for segment in range(segments):
-            current = level * segments + segment
-            next_segment = level * segments + (segment + 1) % segments
-            upper = (level + 1) * segments + segment
-            upper_next = (level + 1) * segments + (segment + 1) % segments
-            faces.extend([[current, upper, next_segment], [next_segment, upper, upper_next]])
-    bottom_center = len(vertices)
-    top_center = bottom_center + 1
-    vertices.extend([[0.0, 0.0, 0.0], [0.0, height_cm, 0.0]])
-    for segment in range(segments):
-        next_segment = (segment + 1) % segments
-        faces.append([bottom_center, next_segment, segment])
-        top = (len(levels) - 1) * segments
-        faces.append([top_center, top + segment, top + next_segment])
-    return np.asarray(vertices, dtype=np.float32), np.asarray(faces, dtype=np.int32)
+            next_segment = (segment + 1) % segments
+            faces_list.append([bottom_center, next_segment, segment])
+            top = (len(levels) - 1) * segments
+            faces_list.append([top_center, top + segment, top + next_segment])
+        return np.asarray(vertices, dtype=np.float32), np.asarray(faces_list, dtype=np.int32)
 
 
 class SilhouetteReconstructor:

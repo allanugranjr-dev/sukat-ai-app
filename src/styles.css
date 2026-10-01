@@ -52,8 +52,10 @@ html { scroll-behavior: smooth; }
 .model-3d-scale strong { color: #8be6dd; font-size: 8px; letter-spacing: .12em; }
 .model-3d-scale span { font-size: 11px; font-weight: 700; }
 .model-3d-scale small { color: rgba(230, 249, 248, .64); font-size: 8px; }
-.model-3d-focus-status { background: rgba(5,16,29,.68); border: 1px solid rgba(126,215,211,.22); border-radius: 999px; bottom: 15px; color: rgba(230,249,248,.7); font-size: 9px; left: 50%; margin: 0; max-width: 48%; overflow: hidden; padding: 7px 11px; pointer-events: none; position: absolute; text-overflow: ellipsis; transform: translateX(-50%); white-space: nowrap; z-index: 2; }
+.model-3d-focus-status { background: rgba(5,16,29,.68); border: 1px solid rgba(126,215,211,.22); border-radius: 999px; top: 54px; color: rgba(230,249,248,.7); font-size: 9px; left: 50%; margin: 0; max-width: 48%; overflow: hidden; padding: 7px 11px; pointer-events: none; position: absolute; text-overflow: ellipsis; transform: translateX(-50%); white-space: nowrap; z-index: 2; }
+.model-3d-focus-status:not(.active) { opacity: 0; visibility: hidden; }
 .model-3d-focus-status.active { border-color: rgba(126,215,211,.65); color: #dffaf7; }
+.model-3d-focus-hint { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 0; padding: 0 15px 14px; }
 .model-preview-copy { align-items: center; display: grid; gap: 17px; grid-template-columns: 67px minmax(0, 1fr); padding: 24px 28px 27px; }
 .model-preview-copy > div { min-width: 0; }
 .model-preview-copy h3 { margin: 6px 0 8px; }
@@ -1434,6 +1436,8 @@ button:focus:not(:focus-visible) { outline: none; }
 .verification-devcode { background: var(--gold-soft); border: 1px solid #e7d08b; border-radius: 10px; color: var(--gold); font-size: 12px; line-height: 1.5; margin: 0 0 18px; padding: 11px 13px; }
 .verification-devcode strong { color: var(--gold); font-size: 15px; letter-spacing: 0.12em; }
 .verification-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px; }
+.profile-reset-form { border-top: 1px solid var(--line, #e3e8ea); margin-top: 4px; padding-top: 14px; }
+.profile-reset-form .verification-code-input { font-size: 1.6rem; min-height: 54px; }
 .verification-actions .text-button { color: var(--teal-dark); }
 .verification-note { align-items: flex-start; color: var(--muted); display: flex; font-size: 14px; gap: 8px; line-height: 1.5; margin: 22px 0 0; }
 .verification-note svg { color: var(--teal); flex: 0 0 auto; margin-top: 2px; }
@@ -7292,3 +7296,336 @@ body {
     transition: none !important;
   }
 }
+
+/* ============================================================
+   HYBRID DESKTOP LAYOUT — scan/measurement journey as a phone column
+   ------------------------------------------------------------
+   Goal: marketing, auth, and the dressmaker/admin dashboards keep their
+   full desktop width; only the guided scan flow (data-page="scan":
+   prep -> height -> capture -> processing -> results) collapses to a
+   centred ~480px phone-width column on wide screens, and stays full-bleed
+   single-column on phones exactly as before.
+
+   Technique: CSS container queries (no iframe / fixed device frame).
+   Only the scan page becomes a query container, so containment has no
+   side effects on any other page. Appended last so it wins equal-
+   specificity ties against the many re-themed .workspace-content /
+   .results-layout blocks earlier in this file.
+   ============================================================ */
+.workspace-content[data-page="scan"] {
+  container: scanflow / inline-size;
+}
+
+@container scanflow (min-width: 620px) {
+  /* Capture/guided steps share one phone column; the data-dense results
+     review is exempt (data-scan-step="results") so its 3D model, measurement
+     table, and actions keep the wider desktop layout and stop overlapping
+     inside a 480px column. */
+  .workspace-content[data-page="scan"] > .page-stack:not([data-scan-step="results"]) {
+    margin-inline: auto;
+    max-width: 480px;
+  }
+
+  /* Collapse the desktop two-column capture layouts into a single stack.
+     .results-layout is intentionally omitted — results stay full-width. */
+  .workspace-content[data-page="scan"] .scan-content,
+  .workspace-content[data-page="scan"] .capture-layout,
+  .workspace-content[data-page="scan"] .processing-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================
+   Results 3D model must stay pinned while scrolling (desktop).
+   The scan page is a container-query container (container-type
+   on .workspace-content, above). That containment establishes a
+   new containing block, which knocks the position:sticky results
+   viewer loose so the 3D model scrolls away with the page instead
+   of pinning. The results step is a wide two-column review that
+   never uses the phone-column @container query, so turn the
+   container context OFF for that step only. This restores the
+   original desktop cascade where .results-viewer is
+   { position: sticky; top: 92px } and its mobile { position:
+   static } overrides (max-width:980px / mobile nav) still win on
+   phones — so this is desktop-only with no change on mobile.
+   :has() is universally supported in current WebViews. */
+.workspace-content[data-page="scan"]:has(> .page-stack[data-scan-step="results"]) {
+  container-type: normal;
+}
+
+/* Simplified single-page scan input */
+.scan-simple {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.scan-steps {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 2px;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  color: var(--muted);
+}
+.scan-steps li { display: inline-flex; align-items: center; gap: 7px; }
+.scan-steps li:not(:last-child)::after {
+  content: "";
+  width: 16px;
+  height: 1px;
+  background: var(--line);
+  margin-left: 3px;
+}
+.scan-steps li span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--soft-line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.scan-steps li.active { color: var(--ink); }
+.scan-steps li.active span { background: var(--teal); color: #fff; }
+
+.scan-simple-card {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 22px;
+}
+.scan-simple-card h2 {
+  margin: 0;
+  font-size: 17px;
+  color: var(--ink);
+}
+.scan-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--teal);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scan-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.scan-tips {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  background: var(--teal-soft);
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.scan-tips li { display: flex; align-items: center; gap: 8px; }
+.scan-tips li svg { color: var(--teal); flex: none; }
+.scan-camera-button {
+  width: 100%;
+  justify-content: center;
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+  margin-top: 14px;
+}
+.scan-camera-button:hover { background: var(--teal-dark); border-color: var(--teal-dark); }
+.scan-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+}
+.scan-or::before,
+.scan-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.scan-camera {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scan-camera-stage {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0d1d2c;
+}
+.scan-camera-stage video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.scan-camera-actions {
+  display: flex;
+  gap: 10px;
+}
+.scan-camera-actions button { flex: 1; justify-content: center; }
+.scan-photo-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.scan-photo-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px dashed var(--line);
+  background: var(--surface);
+  transition: border-color .2s var(--ease-out), background .2s var(--ease-out);
+}
+.scan-photo-card.filled { border-style: solid; border-color: var(--teal); }
+.scan-photo-card.dragging { border-color: var(--teal); background: var(--teal-soft); }
+.scan-photo-drop {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 10px;
+  text-align: center;
+}
+.scan-photo-drop svg { color: var(--teal); }
+.scan-photo-drop strong { color: var(--ink); font-size: 14px; }
+.scan-photo-drop small { font-size: 12px; line-height: 1.4; }
+.scan-photo-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.scan-photo-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(13, 29, 44, .72);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.scan-photo-badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.scan-height { display: flex; flex-direction: column; gap: 10px; }
+.scan-height-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 15px;
+}
+.scan-height-input:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-soft);
+}
+.scan-consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--soft-line);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  cursor: pointer;
+}
+.scan-consent input { margin-top: 2px; flex: none; }
+.scan-generate {
+  width: 100%;
+  justify-content: center;
+  font-size: 15px;
+  padding: 14px;
+}
+.scan-working {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--teal-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+.scan-working strong { display: block; margin-bottom: 6px; }
+.scan-working-spinner {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--teal);
+  border-top-color: transparent;
+  animation: scan-spin .8s linear infinite;
+}
+@keyframes scan-spin { to { transform: rotate(360deg); } }
+.scan-working-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.scan-working-chips span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .6);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.scan-working-chips span.active { background: var(--teal); color: #fff; }
+.scan-working-chips span.done { color: var(--green); }

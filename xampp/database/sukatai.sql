@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS `users` (
   `unit_system` VARCHAR(10) NOT NULL DEFAULT 'cm',
   `reset_token_hash` CHAR(64) NULL,
   `reset_expires_at` DATETIME NULL,
+  `reset_attempts` TINYINT NOT NULL DEFAULT 0,
+  `reset_last_sent_at` DATETIME NULL,
   `email_verified` TINYINT(1) NOT NULL DEFAULT 0,
   `verified_at` DATETIME NULL,
   `otp_hash` CHAR(64) NULL,
@@ -69,6 +71,7 @@ CREATE TABLE IF NOT EXISTS `scans` (
   `status` VARCHAR(30) NOT NULL DEFAULT 'draft',
   `height_value` DECIMAL(6,2) NULL,
   `height_unit` VARCHAR(10) NOT NULL DEFAULT 'cm',
+  `sex` VARCHAR(10) NOT NULL DEFAULT 'neutral',
   `consent_at` DATETIME NULL,
   `capture_source` VARCHAR(10) NOT NULL DEFAULT 'upload',
   `processing_provider` VARCHAR(120) NULL,
@@ -89,6 +92,11 @@ CREATE TABLE IF NOT EXISTS `scans` (
   KEY `scans_customer_status_idx` (`customer_id`, `status`, `updated_at`),
   KEY `scans_org_status_idx` (`organization_id`, `status`, `updated_at`)
 ) ENGINE=InnoDB;
+
+-- Idempotent migration for installs created before the selectable-sex pipeline.
+-- The reconstruction service reads this to build a male/female/neutral mesh
+-- instead of a fixed androgynous body.
+ALTER TABLE `scans` ADD COLUMN IF NOT EXISTS `sex` VARCHAR(10) NOT NULL DEFAULT 'neutral' AFTER `height_unit`;
 
 CREATE TABLE IF NOT EXISTS `scan_processing_attempts` (
   `id` CHAR(36) NOT NULL,

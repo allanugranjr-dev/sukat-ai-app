@@ -22,4 +22,4 @@ ai-service/models/*
 !ai-service/models/.gitkeep
 ai-service/vendor/
 
-.vercel
+.gsd/

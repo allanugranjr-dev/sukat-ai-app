@@ -1,5 +1,4 @@
 import {
-  type ChangeEvent,
   type DependencyList,
   type FormEvent,
   type KeyboardEvent,
@@ -26,7 +25,8 @@ import {
   onAuthStateChange,
   revokeDressmakerInvitation,
   resendSignupConfirmation,
-  sendPasswordReset,
+  requestPasswordReset,
+  confirmPasswordReset,
   signIn,
   signOut,
   signUpCustomer,
@@ -57,7 +57,7 @@ import {
   updateOrderStatus,
   updateScan,
 } from "./lib/data";
-import { isHeightValid, parseHeightInches, previousScanPosition, scanSteps, type ScanStep, validateUpload } from "./lib/scanFlow";
+import { isHeightValid, parseHeightInches, scanSteps, type ScanStep, validateUpload } from "./lib/scanFlow";
 import { ellipseRadiiForCircumference, measurementGuideKey, measurementGuideMatches, modelHeightCm, modelMeasurementCm } from "./lib/measurementMapping";
 import { extractModelPlaneContour } from "./lib/modelContours";
 import { invitationState, isRemovableInvitation } from "./lib/invitationLifecycle";
@@ -363,11 +363,9 @@ function AuthPage({ mode, notice, onBack, onModeChange, onNotice, onVerification
     setError("");
     setBusy(true);
     try {
+      // "forgot" is handled by the dedicated ForgotPasswordPage, not this form.
       if (mode === "forgot") {
-        if (!email.trim()) throw new Error("Enter your account email.");
-        await sendPasswordReset(email);
-        onNotice("If that email belongs to a SukatAI account, a password reset link is on its way.");
-        onModeChange("signin");
+        onModeChange("forgot");
       } else if (mode === "signin") {
         if (!email.trim() || !password) throw new Error("Enter your email and password.");
         if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) throw new Error("Enter a valid email address.");
@@ -587,6 +585,7 @@ function ConfiguredApp() {
   if (verificationRequested || verificationEmail) return <EmailVerificationPage email={session?.user.email ?? verificationEmail} info={verificationInfo} onBack={() => { clearSpecialUrl(); setVerificationEmail(""); setVerificationInfo(undefined); setPublicView("signin"); }} onVerified={() => { clearSpecialUrl(); setVerificationEmail(""); setVerificationInfo(undefined); if (session) void refreshProfile(); }} />;
   if (invitationFlowRequested && !session && invitationAuthOpen) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} showBack onBack={() => { setNotice(""); setInvitationAuthOpen(false); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email, info) => { setNotice(""); setVerificationEmail(email); setVerificationInfo(info); }} />;
   if (invitationFlowRequested && !session) return <InvitationWelcomePage session={null} expired={expiredInvitationCallback} onBack={() => { finishInvitationFlow(); setPublicView("signin"); }} onContinue={() => { setNotice(""); setPublicView("signin"); setInvitationAuthOpen(true); }} />;
+  if (!session && publicView === "forgot") return <ForgotPasswordPage onBack={() => { setNotice(""); setPublicView("signin"); }} onDone={() => { setNotice(""); setPublicView("signin"); }} />;
   if (!session) return <AuthPage mode={publicView === "landing" ? "signin" : publicView} notice={notice} onBack={() => { setNotice(""); setPublicView("signin"); }} onModeChange={(mode) => { setNotice(""); setPublicView(mode); }} onNotice={setNotice} onVerification={(email, info) => { setNotice(""); setVerificationEmail(email); setVerificationInfo(info); }} />;
   if (session && session.user.email_confirmed_at == null) return <EmailVerificationPage email={session.user.email ?? verificationEmail} info={verificationInfo} onBack={() => { void signOut(); }} onVerified={() => { void refreshProfile(); }} />;
   if (!profile || !isRole(profile.role)) return <ProfileUnavailable message={profileError || "Your authenticated account does not have a valid SukatAI profile."} onSignOut={() => void signOut()} />;
@@ -620,6 +619,129 @@ function PasswordResetPage({ onComplete }: { onComplete: () => void }) {
     }
   };
   return <main className="setup-page"><div className="setup-card reset-card"><Logo /><p className="eyebrow">ACCOUNT RECOVERY</p><h1>Choose a new password.</h1><p>Use a password you have not used elsewhere. Your reset link is single-purpose and expires.</p><form className="auth-form" onSubmit={submit}><Field label="New password" value={password} onChange={setPassword} placeholder="At least 8 characters" type="password" autoComplete="new-password" /><Field label="Confirm password" value={confirm} onChange={setConfirm} placeholder="Repeat your password" type="password" autoComplete="new-password" />{notice && <div className="form-notice"><Icon name="check" size={16} /> {notice}</div>}{error && <InlineError message={error} />}<Button type="submit" disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Updating…" : "Update password"}</Button></form></div></main>;
+}
+
+// Dedicated forgot-password flow reached from the sign-in screen. Two steps on
+// one page: (1) enter the account email to receive a 6-digit code, then (2)
+// enter that code plus a new password. A correct code sets the password and
+// signs the user in (the server marks the email verified too), so on success we
+// simply hand control back to App, which re-renders into the workspace via the
+// SIGNED_IN broadcast.
+function ForgotPasswordPage({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
+  const [step, setStep] = useState<"request" | "confirm">("request");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [devCode, setDevCode] = useState<string | undefined>(undefined);
+  const [cooldown, setCooldown] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const codeReady = code.length === 6;
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
+
+  const request = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) { setError("Enter a valid email address."); return; }
+    setBusy(true);
+    try {
+      const info = await requestPasswordReset(email);
+      if (info?.dev_code) setDevCode(info.dev_code);
+      setStep("confirm");
+      setNotice("If that email belongs to a SukatAI account, a 6-digit reset code is on its way.");
+      setCooldown(45);
+    } catch (reason: unknown) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resend = async () => {
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      const info = await requestPasswordReset(email);
+      if (info?.dev_code) setDevCode(info.dev_code);
+      setNotice("A fresh reset code is on its way. Enter the latest code we sent you.");
+      setCooldown(45);
+    } catch (reason: unknown) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmReset = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    if (!codeReady) { setError("Enter the 6-digit code we emailed you."); return; }
+    if (password.length < 8) { setError("Use a password with at least 8 characters."); return; }
+    if (password !== confirm) { setError("Passwords do not match."); return; }
+    setBusy(true);
+    try {
+      await confirmPasswordReset(email, code, password);
+      onDone();
+    } catch (reason: unknown) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="auth-page verification-page">
+    <section className="auth-story verification-story">
+      <div className="auth-story-inner">
+        <Logo inverse />
+        <p className="eyebrow">ACCOUNT RECOVERY</p>
+        <h1>Reset your password <em>securely.</em></h1>
+        <p>We email a one-time code to confirm it is really you before you choose a new password.</p>
+        <div className="story-list"><span><Icon name="mail" size={18} /> One secure reset code</span><span><Icon name="lock" size={18} /> Choose a new password</span><span><Icon name="arrow-right" size={18} /> Back into your account</span></div>
+      </div>
+      <span className="story-footer">SukatAI · secure measurement workspace</span>
+    </section>
+    <section className="auth-form-panel"><div className="auth-form-wrap verification-card">
+      <div className="verification-topline"><Badge tone="teal" dot>Password reset</Badge><span>Step {step === "request" ? "1" : "2"} of 2</span></div>
+      <div className="verification-icon" aria-hidden="true"><Icon name={step === "request" ? "mail" : "lock"} size={26} /></div>
+      {step === "request" ? <>
+        <div className="auth-heading"><p className="eyebrow">FORGOT YOUR PASSWORD?</p><h2>Enter your email.</h2><p>Tell us the email on your SukatAI account and we will send a 6-digit reset code.</p></div>
+        <form className="auth-form" onSubmit={request}>
+          <Field label="Email address" value={email} onChange={setEmail} placeholder="Email address" type="email" autoComplete="email" icon="mail" />
+          {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}
+          {error && <InlineError message={error} />}
+          <Button type="submit" disabled={busy || !email.trim()} icon={busy ? undefined : "arrow-right"}>{busy ? "Sending…" : "Send reset code"}</Button>
+        </form>
+        <div className="verification-actions"><button type="button" className="text-button" onClick={onBack}>Back to sign in</button></div>
+      </> : <>
+        <div className="auth-heading"><p className="eyebrow">CHECK YOUR INBOX</p><h2>Enter your code.</h2><p>We sent a 6-digit code to <strong>{email}</strong>. Enter it and choose a new password.</p></div>
+        {devCode && <div className="verification-devcode">Dev mode — no email configured. Your code is <strong>{devCode}</strong></div>}
+        <form className="auth-form" onSubmit={confirmReset}>
+          <div className="field verification-code-field">
+            <label htmlFor="reset-code">6-digit reset code</label>
+            <input id="reset-code" name="reset-code" inputMode="numeric" pattern="\d*" maxLength={6} autoComplete="one-time-code" className="verification-code-input" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />
+          </div>
+          <div className="field"><label htmlFor="reset-password">New password</label><div className="input-with-action auth-password-input"><Icon name="lock" size={22} /><input id="reset-password" name="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" type={showPassword ? "text" : "password"} autoComplete="new-password" /><button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword((value) => !value)}><Icon name="eye" size={22} /></button></div></div>
+          <Field label="Confirm new password" value={confirm} onChange={setConfirm} placeholder="Repeat your password" type="password" autoComplete="new-password" />
+          {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}
+          {error && <InlineError message={error} />}
+          <Button type="submit" disabled={busy || !codeReady} icon={busy ? undefined : "arrow-right"}>{busy ? "Updating…" : "Reset password"}</Button>
+        </form>
+        <div className="verification-actions"><Button variant="secondary" type="button" onClick={() => void resend()} disabled={busy || cooldown > 0} icon="mail">{cooldown > 0 ? `Resend in ${cooldown}s` : "Resend reset code"}</Button><button type="button" className="text-button" onClick={onBack}>Back to sign in</button></div>
+        <p className="verification-note"><Icon name="shield" size={15} /> If you do not see the message, check your spam or promotions folder.</p>
+      </>}
+    </div></section>
+  </div>;
 }
 
 function EmailVerificationPage({ email, info, onBack, onVerified }: { email: string; info?: VerificationInfo; onBack: () => void; onVerified: () => void }) {
@@ -989,7 +1111,7 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
           </div>
         </div>
       </header>
-      <main id="main-content" className="workspace-content" tabIndex={-1}>{children}</main>
+      <main id="main-content" className="workspace-content" data-page={page} tabIndex={-1}>{children}</main>
       <nav className="mobile-bottom-nav" aria-label={`${workspaceLabel} quick navigation`}>
         {primaryItems.map((item) => <button type="button" key={item.key} aria-current={page === item.key ? "page" : undefined} className={cn(page === item.key && "active")} onClick={() => go(item.key)}><Icon name={item.icon} size={23} /><span>{mobileLabel(item)}</span></button>)}
       </nav>
@@ -998,12 +1120,11 @@ function AppShell({ profile, page, onNavigate, onSignOut, children }: { profile:
 }
 
 type CaptureKey = "front" | "side" | "back";
-type CaptureSlot = { key: CaptureKey; label: string; required: boolean; captured: boolean; asset?: ScanAsset };
+type CaptureSlot = { key: CaptureKey; label: string; required: boolean; captured: boolean; asset?: ScanAsset; previewUrl?: string };
 
 const captureLabels: Array<{ key: CaptureKey; label: string; required: boolean }> = [
   { key: "front", label: "Front", required: true },
   { key: "side", label: "Side", required: true },
-  { key: "back", label: "Back", required: false },
 ];
 
 function emptyCaptureSlots(): CaptureSlot[] {
@@ -1061,9 +1182,9 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
   const [scan, setScan] = useState<Scan | null>(null);
   const [height, setHeight] = useState("");
   const [unit, setUnit] = useState<"cm" | "ftin">(profile.unit_system);
+  const [sex, setSex] = useState<"male" | "female" | "neutral">("neutral");
   const [unknownHeight, setUnknownHeight] = useState(false);
-  const [prep, setPrep] = useState([false, false, false, false]);
-  const [consent, setConsent] = useState([false, false]);
+  const [consent, setConsent] = useState(false);
   const [captureIndex, setCaptureIndex] = useState(0);
   const [captures, setCaptures] = useState<CaptureSlot[]>(emptyCaptureSlots());
   const [cameraOn, setCameraOn] = useState(false);
@@ -1082,6 +1203,7 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
     setScanId(bundle.scan.id);
     setHeight(heightForInput(bundle.scan));
     setUnit(bundle.scan.height_unit);
+    setSex(bundle.scan.sex ?? "neutral");
     setCaptures(captureSlotsFromBundle(bundle));
     const nextIndex = captureLabels.findIndex((item) => !bundle.assets.some((asset) => asset.asset_type === item.key));
     setCaptureIndex(nextIndex === -1 ? 0 : nextIndex);
@@ -1095,7 +1217,7 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
         const bundle = await getScanBundle(resumable.id, true);
         if (!active) return;
         hydrateBundle(bundle);
-        setStep(bundle.scan.status === "needs_recapture" ? "capture" : bundle.scan.status === "processing_queued" || bundle.scan.status === "processing" ? "processing" : ["ready_to_share", "ready_for_review"].includes(bundle.scan.status) ? "results" : bundle.assets.length > 0 ? "capture" : "prep");
+        setStep(bundle.scan.status === "processing_queued" || bundle.scan.status === "processing" ? "processing" : ["ready_to_share", "ready_for_review"].includes(bundle.scan.status) ? "results" : "prep");
       }
     }).catch((reason: unknown) => { if (active) setError(readableError(reason)); }).finally(() => { if (active) setHydrating(false); });
     return () => { active = false; };
@@ -1146,58 +1268,34 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
     setCameraOn(false);
   }
 
-  const continueFromPrep = async () => {
-    setError("");
-    if (!prep.every(Boolean) || !consent.every(Boolean)) { setError("Complete the preparation and consent checks before continuing."); return; }
-    setBusy(true);
-    try {
-      const created = await createScan({ customerId: profile.id, organizationId: profile.organization_id, heightValue: null, heightUnit: unit, consentAt: new Date().toISOString(), captureSource: "upload" });
-      setScan(created);
-      setScanId(created.id);
-      setStep("height");
-      setNotice("Scan draft created securely.");
-    } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
+  const ensureDraft = async (source: "camera" | "upload"): Promise<string> => {
+    if (scanId) return scanId;
+    const created = await createScan({ customerId: profile.id, organizationId: profile.organization_id, heightValue: null, heightUnit: unit, consentAt: new Date().toISOString(), captureSource: source });
+    setScan(created);
+    setScanId(created.id);
+    return created.id;
   };
 
-  const continueFromHeight = async () => {
-    setError("");
-    if (!isHeightValid(height, unit, unknownHeight)) { setError(unit === "cm" ? "Enter a height between 120 and 230 cm." : "Enter a height between 4'0\" and 7'11\"."); return; }
-    if (!scanId) { setError("Your scan draft is missing. Return to preparation and start again."); return; }
-    setBusy(true);
-    try {
-      const updated = await updateScan(scanId, { height_value: storedHeightValue(height, unit, unknownHeight), height_unit: unit });
-      setScan(updated);
-      setStep("capture");
-      setNotice("");
-    } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
-  };
-
-  const uploadForCurrentSlot = async (file: File, source: "camera" | "upload") => {
-    if (!scanId) { setError("Your scan draft is missing. Return to preparation and start again."); return; }
+  const uploadForSlot = async (index: number, file: File, source: "camera" | "upload") => {
     const validation = validateUpload(file);
     if (!validation.valid) { setError(validation.message); return; }
-    const slot = captures[captureIndex];
+    const slot = captures[index];
     if (!slot) return;
     const previousAsset = slot.asset;
     setUploading(true);
     setError("");
     try {
-      const asset = await uploadScanAsset({ scanId, customerId: profile.id, organizationId: profile.organization_id, assetType: slot.key, file });
+      const id = await ensureDraft(source);
+      const asset = await uploadScanAsset({ scanId: id, customerId: profile.id, organizationId: profile.organization_id, assetType: slot.key, file });
       if (previousAsset) {
         try { await deleteScanAsset(previousAsset); } catch { /* Keep the new capture even if cleanup of the previous asset is delayed. */ }
       }
-      const updated = await updateScan(scanId, { status: "uploaded", capture_source: source });
+      const updated = await updateScan(id, { status: "uploaded", capture_source: source });
       setScan(updated);
-      setCaptures((current) => current.map((item, index) => index === captureIndex ? { ...item, captured: true, asset } : item));
-      setNotice(`${slot.label} view uploaded securely.`);
-      if (captureIndex < captureLabels.length - 1) setCaptureIndex((index) => index + 1);
+      const previewUrl = URL.createObjectURL(file);
+      setCaptures((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, captured: true, asset, previewUrl } : item));
+      setNotice(`${slot.label} view added.`);
     } catch (reason: unknown) { setError(readableError(reason)); } finally { setUploading(false); }
-  };
-
-  const chooseFile = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.currentTarget.value = "";
-    if (file) await uploadForCurrentSlot(file, "upload");
   };
 
   const startCamera = async () => {
@@ -1231,34 +1329,41 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
   const captureCameraFrame = async () => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || video.videoHeight === 0) { setError("The camera is not ready yet. Try again in a moment or upload an image."); return; }
+    const targetIndex = captures.findIndex((slot) => !slot.captured);
+    const index = targetIndex === -1 ? captureIndex : targetIndex;
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
     if (!blob) { setError("The camera frame could not be captured."); return; }
-    await uploadForCurrentSlot(new File([blob], `${captures[captureIndex]?.key ?? "capture"}.jpg`, { type: "image/jpeg" }), "camera");
+    await uploadForSlot(index, new File([blob], `${captures[index]?.key ?? "capture"}.jpg`, { type: "image/jpeg" }), "camera");
+    const nextUncaptured = captures.findIndex((slot, i) => i !== index && !slot.captured);
+    if (nextUncaptured === -1) stopCamera(); else setCaptureIndex(nextUncaptured);
   };
 
-  const completeCapture = async () => {
+  const generateScan = async () => {
     setError("");
-    if (!scanId || captures.some((item) => item.required && !item.captured)) { setError("Upload both the front and side views before continuing. A back view is optional."); return; }
+    if (!isHeightValid(height, unit, unknownHeight)) { setError(unit === "cm" ? "Enter a height between 120 and 230 cm." : "Enter a height between 4'0\" and 7'11\"."); return; }
+    if (!consent) { setError("Please agree to processing before generating your scan."); return; }
+    if (captures.some((slot) => slot.required && !slot.captured)) { setError("Add your front and side photos before generating."); return; }
     stopCamera();
     setBusy(true);
-    setStep("processing");
     try {
-      await updateScan(scanId, { status: "processing_queued" });
-      const result = await requestScanProcessing(scanId);
+      const id = await ensureDraft("upload");
+      await updateScan(id, { height_value: storedHeightValue(height, unit, unknownHeight), height_unit: unit, sex, status: "uploaded" });
+      await updateScan(id, { status: "processing_queued" });
+      const result = await requestScanProcessing(id);
       setProcessingNotice(result.message);
-      if (result.status === "failed") setError(result.message);
-      if (result.status === "ready") setStep("results");
-    } catch (reason: unknown) { setProcessingNotice(readableError(reason)); } finally { setBusy(false); }
+      if (result.status === "ready") { setStep("results"); return; }
+      if (result.status === "failed") { setError(result.message); return; }
+      setStep("processing");
+    } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
   };
 
   const goBack = () => {
-    const position = previousScanPosition(step, captureIndex);
-    setStep(position.step);
-    setCaptureIndex(position.captureIndex);
+    setStep("prep");
+    setCaptureIndex(0);
     setError("");
   };
 
@@ -1283,27 +1388,26 @@ function CustomerScan({ profile, onNavigate }: { profile: Profile; onNavigate: (
     return () => window.removeEventListener("sukatai:native-back", handleNativeBack);
   }, [cameraOn, captureIndex, onNavigate, step]);
 
-  if (hydrating) return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Start a new scan" description="Loading any unfinished scan securely…" /><LoadingState /></div>;
-  return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Start a new scan" description="Two required views, an optional back view, and a reviewable result." action={step !== "prep" ? <Button variant="ghost" icon="arrow-left" onClick={goBack}>Back</Button> : <Button variant="secondary" icon="x" onClick={() => onNavigate("overview")}>Exit scan</Button>} /><ScanProgress step={step} />{error && <InlineError message={error} />}{notice && <div className="form-notice scan-notice" role="status" aria-live="polite"><Icon name="check" size={16} /> {notice}</div>}{step === "prep" && <ScanPreparation prep={prep} consent={consent} setPrep={setPrep} setConsent={setConsent} onContinue={continueFromPrep} busy={busy} />}{step === "height" && <ScanHeight height={height} unit={unit} unknownHeight={unknownHeight} setHeight={setHeight} setUnit={setUnit} setUnknownHeight={setUnknownHeight} onContinue={continueFromHeight} busy={busy} />}{step === "capture" && <ScanCapture captures={captures} captureIndex={captureIndex} setCaptureIndex={setCaptureIndex} cameraOn={cameraOn} videoRef={videoRef} uploading={uploading} onStartCamera={() => void startCamera()} onStopCamera={stopCamera} onCapture={() => void captureCameraFrame()} onChooseFile={(event) => void chooseFile(event)} onRemove={async (index) => { const asset = captures[index]?.asset; if (!asset) return; try { await deleteScanAsset(asset); setCaptures((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, captured: false, asset: undefined } : item)); setNotice(`${captures[index].label} view removed.`); } catch (reason: unknown) { setError(readableError(reason)); } }} onContinue={() => void completeCapture()} busy={busy} />}{step === "processing" && scanId && <ScanProcessing scanId={scanId} initialMessage={processingNotice} onBack={() => { setStep("capture"); setCaptureIndex(0); }} onResults={() => setStep("results")} />}{step === "results" && scanId && <ScanResults scanId={scanId} onRecapture={() => { setStep("capture"); setCaptureIndex(0); }} onDashboard={() => onNavigate("overview")} />}</div>;
+  if (hydrating) return <div className="page-stack"><SectionHeader eyebrow="GUIDED SCAN" title="Scan yourself now" description="Loading any unfinished scan securely…" /><LoadingState /></div>;
+  return <div className="page-stack" data-scan-step={step}><SectionHeader eyebrow="GUIDED SCAN" title="Scan yourself now" description="Two photos and your height. That's the whole input." action={step === "prep" ? <Button variant="secondary" icon="x" onClick={() => onNavigate("overview")}>Exit scan</Button> : <Button variant="ghost" icon="arrow-left" onClick={goBack}>Back</Button>} />{error && <InlineError message={error} />}{step === "prep" && <ScanInput captures={captures} captureIndex={captureIndex} setCaptureIndex={setCaptureIndex} cameraOn={cameraOn} videoRef={videoRef} uploading={uploading} height={height} unit={unit} sex={sex} consent={consent} setHeight={setHeight} setUnit={setUnit} setSex={setSex} setConsent={setConsent} onStartCamera={() => void startCamera()} onStopCamera={stopCamera} onCapture={() => void captureCameraFrame()} onUploadSlot={(index, file) => void uploadForSlot(index, file, "upload")} onRemoveSlot={async (index) => { const asset = captures[index]?.asset; if (!asset) return; try { await deleteScanAsset(asset); setCaptures((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, captured: false, asset: undefined, previewUrl: undefined } : item)); setError(""); } catch (reason: unknown) { setError(readableError(reason)); } }} onGenerate={() => void generateScan()} busy={busy} />}{step === "processing" && scanId && <ScanProcessing scanId={scanId} initialMessage={processingNotice} onBack={() => { setStep("prep"); setCaptureIndex(0); }} onResults={() => setStep("results")} />}{step === "results" && scanId && <ScanResults scanId={scanId} onRecapture={() => { setStep("prep"); setCaptureIndex(0); }} onDashboard={() => onNavigate("overview")} />}</div>;
 }
 
-function ScanPreparation({ prep, consent, setPrep, setConsent, onContinue, busy }: { prep: boolean[]; consent: boolean[]; setPrep: (value: boolean[]) => void; setConsent: (value: boolean[]) => void; onContinue: () => void; busy: boolean }) {
-  const prepItems = ["Use bright, even lighting.", "Stand far enough back to show your whole body.", "Wear fitted clothing without a bulky jacket.", "Keep your phone steady at chest height."];
-  const consentItems = ["I agree to keep these scan photos in my private account.", "I understand that a dressmaker should check the measurements before sewing."];
-  return <div className="scan-content"><Panel className="scan-main-card"><p className="eyebrow">STEP 01 · PREPARE</p><h2>Get ready for two photos.</h2><p className="panel-lede">A few simple checks help us create a clearer fit record for you and your dressmaker. A back photo can be added later if you have one.</p><div className="checklist" role="group" aria-label="Photo preparation checklist">{prepItems.map((item, index) => <label key={item} className="check-row"><input type="checkbox" checked={prep[index]} onChange={(event) => setPrep(prep.map((value, itemIndex) => itemIndex === index ? event.target.checked : value))} /><span><i aria-hidden="true">{index + 1}</i><strong>{item}</strong></span></label>)}</div><div className="consent-box" role="group" aria-label="Privacy and review agreement"><p className="eyebrow">BEFORE YOU CONTINUE</p>{consentItems.map((item, index) => <label key={item} className="check-label"><input type="checkbox" checked={consent[index]} onChange={(event) => setConsent(consent.map((value, itemIndex) => itemIndex === index ? event.target.checked : value))} /><span>{item}</span></label>)}</div><Button onClick={onContinue} disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Creating secure draft…" : "Continue to height"}</Button></Panel><Panel className="scan-side-card"><span className="side-card-icon"><Icon name="shield" size={20} /></span><h3>Your photos stay private.</h3><p>Nothing is uploaded until you continue. Each view is saved securely with this scan and shared only with authorized reviewers.</p><div className="side-card-list"><span><Icon name="lock" size={15} /> Private account access</span><span><Icon name="camera" size={15} /> Two required views</span><span><Icon name="message" size={15} /> Review when ready</span></div></Panel></div>;
+function ScanInput({ captures, captureIndex, cameraOn, videoRef, uploading, height, unit, sex, consent, setHeight, setUnit, setSex, setConsent, onStartCamera, onStopCamera, onCapture, onUploadSlot, onRemoveSlot, onGenerate, busy }: { captures: CaptureSlot[]; captureIndex: number; setCaptureIndex: (index: number) => void; cameraOn: boolean; videoRef: React.RefObject<HTMLVideoElement | null>; uploading: boolean; height: string; unit: "cm" | "ftin"; sex: "male" | "female" | "neutral"; consent: boolean; setHeight: (value: string) => void; setUnit: (value: "cm" | "ftin") => void; setSex: (value: "male" | "female" | "neutral") => void; setConsent: (value: boolean) => void; onStartCamera: () => void; onStopCamera: () => void; onCapture: () => void; onUploadSlot: (index: number, file: File) => void; onRemoveSlot: (index: number) => void; onGenerate: () => void; busy: boolean }) {
+  const [showTips, setShowTips] = useState(false);
+  const heightReady = isHeightValid(height, unit, false);
+  const photosReady = captures.every((slot) => !slot.required || slot.captured);
+  const canGenerate = photosReady && heightReady && consent && !busy && !uploading;
+  const currentLabel = captures.find((slot) => !slot.captured)?.label ?? captures[captureIndex]?.label ?? "Front";
+  const tips = ["Use bright, even lighting.", "Stand far enough back to show your whole body.", "Wear fitted clothing without a bulky jacket.", "Keep your phone steady at chest height."];
+  return <div className="scan-simple"><ol className="scan-steps" aria-label="Scan steps"><li className="active"><span>01</span> Photos</li><li className="active"><span>02</span> Height</li><li><span>03</span> 3D result</li></ol><Panel className="scan-simple-card"><section className="scan-photos"><div className="scan-section-head"><h2>Photos</h2><button type="button" className="text-button" onClick={() => setShowTips((value) => !value)} aria-expanded={showTips}>Photo tips <Icon name="info" size={14} /></button></div><p className="scan-hint">Full body in frame, arms slightly away from your sides, fitted clothing.</p>{showTips && <ul className="scan-tips">{tips.map((tip) => <li key={tip}><Icon name="check" size={13} /> {tip}</li>)}</ul>}{cameraOn ? <div className="scan-camera"><div className="scan-camera-stage"><video ref={videoRef} autoPlay muted playsInline aria-label="Live camera preview" /><div className="capture-guide" aria-hidden="true"><span /><span /><span /></div></div><p className="scan-hint">Capturing {currentLabel} view. Line up your whole body, then capture.</p><div className="scan-camera-actions"><Button variant="secondary" icon="x" onClick={onStopCamera}>Stop camera</Button><Button icon="camera" onClick={onCapture} disabled={uploading}>{uploading ? "Uploading…" : `Capture ${currentLabel}`}</Button></div></div> : <><Button className="scan-camera-button" icon="camera" onClick={onStartCamera} disabled={uploading}>Use my camera — guided capture with timer</Button><div className="scan-or"><span>OR UPLOAD PHOTOS</span></div><div className="scan-photo-grid">{captures.map((slot, index) => <PhotoCard key={slot.key} slot={slot} index={index} onUpload={onUploadSlot} onRemove={onRemoveSlot} disabled={uploading} />)}</div></>}</section><section className="scan-height"><h2>Height</h2><div className="unit-toggle" role="group" aria-label="Height unit"><button type="button" aria-pressed={unit === "cm"} className={unit === "cm" ? "active" : ""} onClick={() => setUnit("cm")}>cm</button><button type="button" aria-pressed={unit === "ftin"} className={unit === "ftin" ? "active" : ""} onClick={() => setUnit("ftin")}>ft / in</button></div><input className="scan-height-input" aria-label="Your height" value={height} onChange={(event) => setHeight(event.target.value)} placeholder={unit === "cm" ? "e.g. 175" : "e.g. 5'9\""} inputMode={unit === "cm" ? "numeric" : "text"} /></section><section className="scan-sex"><h2>Body type</h2><p className="scan-hint">Pick the body the model should be built from. This shapes the 3D result.</p><div className="unit-toggle" role="group" aria-label="Body type"><button type="button" aria-pressed={sex === "male"} className={sex === "male" ? "active" : ""} onClick={() => setSex("male")}>Male</button><button type="button" aria-pressed={sex === "female"} className={sex === "female" ? "active" : ""} onClick={() => setSex("female")}>Female</button><button type="button" aria-pressed={sex === "neutral"} className={sex === "neutral" ? "active" : ""} onClick={() => setSex("neutral")}>Neutral</button></div></section><label className="scan-consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>I agree my photos will be processed to generate my measurements and 3D model, and understand they're deleted immediately after processing.</span></label><Button className="scan-generate" onClick={onGenerate} disabled={!canGenerate} icon={busy ? undefined : "scan"}>{busy ? "Working…" : "Generate my 3D scan"}</Button>{busy && <div className="scan-working" role="status" aria-live="polite"><span className="scan-working-spinner" aria-hidden="true" /><div><strong>Working… (this may take ~10 seconds)</strong><div className="scan-working-chips"><span className="done"><Icon name="check" size={11} /> Preparing photos</span><span className="active">Sending</span><span>Reconstructing</span></div></div></div>}</Panel></div>;
 }
 
-function ScanHeight({ height, unit, unknownHeight, setHeight, setUnit, setUnknownHeight, onContinue, busy }: { height: string; unit: "cm" | "ftin"; unknownHeight: boolean; setHeight: (value: string) => void; setUnit: (value: "cm" | "ftin") => void; setUnknownHeight: (value: boolean) => void; onContinue: () => void; busy: boolean }) {
-  return <div className="calibration-card"><div className="calibration-visual" aria-hidden="true"><div className="height-grid" /><div className="height-ruler"><span>230</span><span>200</span><span>170</span><span>140</span><span>120</span></div><div className="height-person"><i /><b /><span /><em /><strong /></div><div className="height-line" /></div><div className="calibration-copy"><p className="eyebrow">STEP 02 · HEIGHT</p><h2>Tell us your height.</h2><p>Height is used to calibrate the two photos into real-world centimetres. Enter a value before continuing.</p><div className="unit-toggle" role="group" aria-label="Height unit"><button type="button" aria-pressed={unit === "cm"} className={unit === "cm" ? "active" : ""} onClick={() => setUnit("cm")}>Centimetres</button><button type="button" aria-pressed={unit === "ftin"} className={unit === "ftin" ? "active" : ""} onClick={() => setUnit("ftin")}>Feet / inches</button></div><div className="field"><label htmlFor="height-value">Height</label><input id="height-value" name="height" aria-describedby="height-help" value={height} onChange={(event) => setHeight(event.target.value)} placeholder={unit === "cm" ? "e.g. 170" : "e.g. 5'7\""} /><small id="height-help" className="field-hint">{unit === "cm" ? "Enter between 120 and 230 cm." : "Enter between 4'0\" and 7'11\"."}</small></div><Button onClick={onContinue} disabled={busy} icon={busy ? undefined : "arrow-right"}>{busy ? "Saving height…" : "Continue to photos"}</Button></div></div>;
-}
-
-function ScanCapture({ captures, captureIndex, setCaptureIndex, cameraOn, videoRef, uploading, onStartCamera, onStopCamera, onCapture, onChooseFile, onRemove, onContinue, busy }: { captures: CaptureSlot[]; captureIndex: number; setCaptureIndex: (index: number) => void; cameraOn: boolean; videoRef: React.RefObject<HTMLVideoElement | null>; uploading: boolean; onStartCamera: () => void; onStopCamera: () => void; onCapture: () => void; onChooseFile: (event: ChangeEvent<HTMLInputElement>) => void; onRemove: (index: number) => Promise<void>; onContinue: () => void; busy: boolean }) {
-  const current = captures[captureIndex] ?? captures[0];
-  const currentUrl = current?.asset?.signedUrl;
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const requiredReady = captures.filter((slot) => slot.required).every((slot) => slot.captured);
-  const nextSlot = captures.find((slot) => !slot.captured);
-  return <div className="capture-layout"><Panel className="capture-stage-card"><div className="capture-stage-heading"><div><p className="eyebrow">STEP 03 · PHOTOS</p><h2>{current?.label ?? "Front"} view</h2><p>Keep your whole body in frame. You can replace any photo before submitting.</p></div><Badge tone={current?.captured ? "success" : "teal"} dot>{current?.captured ? "UPLOADED" : current?.required ? "REQUIRED" : "OPTIONAL"}</Badge></div><p className="sr-only" role="status" aria-live="polite">Viewing {current?.label ?? "Front"} view. {current?.captured ? "This view is uploaded." : "This view is ready for capture."}</p><div className={cn("capture-stage", currentUrl && "has-capture")} role="region" aria-label={`${current?.label ?? "Front"} camera capture area`}>{cameraOn && <video ref={videoRef} autoPlay muted playsInline className="capture-video" aria-label="Live camera preview" />}{!cameraOn && currentUrl && <img className="capture-preview" src={currentUrl} alt={`${current?.label} scan view`} />}{!cameraOn && !currentUrl && <div className="capture-empty"><span><Icon name="camera" size={31} /></span><strong>Camera or upload</strong><small>Your selected view will appear here after a successful upload.</small></div>}{cameraOn && <div className="capture-guide" aria-hidden="true"><span /><span /><span /></div>}</div><div className="capture-controls"><div className="capture-progress"><p className="eyebrow">VIEWS · FRONT + SIDE REQUIRED</p><div>{captures.map((slot, index) => <button key={slot.key} type="button" className={cn(index === captureIndex && "current", slot.captured && "done")} aria-current={index === captureIndex ? "step" : undefined} aria-label={`${slot.label} view${slot.required ? " required" : " optional"}${slot.captured ? ", uploaded" : ""}`} onClick={() => setCaptureIndex(index)}><i>{slot.captured ? <Icon name="check" size={12} /> : index + 1}</i><small>{slot.label}{!slot.required && " · optional"}</small></button>)}</div></div><div className="capture-actions">{cameraOn ? <><Button variant="secondary" onClick={onStopCamera} icon="x">Stop camera</Button><Button onClick={onCapture} disabled={uploading} icon="camera">{uploading ? "Uploading…" : "Capture frame"}</Button></> : <><input ref={fileInputRef} className="sr-only" type="file" aria-label={"Upload " + (current?.label ?? "current") + " scan photo"} accept="image/jpeg,image/png,image/webp" onChange={onChooseFile} /><Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={uploading} icon="upload">{uploading ? "Uploading…" : "Upload image"}</Button><Button variant="ghost" onClick={onStartCamera} disabled={uploading} icon="camera">Use camera</Button></>}</div></div></Panel><div className="capture-side"><Panel className="capture-next"><p className="eyebrow">NEXT STEP</p><h3>{requiredReady ? "Front and side are ready." : `Add the ${nextSlot?.label.toLowerCase() ?? "next"} view.`}</h3><p>{requiredReady ? "Submit now, or add an optional back view for your tailor." : "Front and side are required. A back view is optional and can be added for extra review context."}</p><Button onClick={onContinue} disabled={busy || uploading || !requiredReady} icon="arrow-right">{busy ? "Submitting…" : "Submit photos"}</Button></Panel><Panel className="capture-quality"><p className="eyebrow">PHOTO CHECKLIST</p><div className="quality-list"><span><Icon name="check" size={14} /> JPG, PNG, or WebP</span><span><Icon name="check" size={14} /> Maximum 10 MB each</span><span><Icon name="lock" size={14} /> Stored privately</span></div><div className="uploaded-list">{captures.map((slot, index) => <div key={slot.key}><span className={slot.captured ? "uploaded" : "not-uploaded"}><Icon name={slot.captured ? "check" : "clock"} size={12} /></span><span><strong>{slot.label}{!slot.required && " · optional"}</strong><small>{slot.captured ? "Uploaded" : slot.required ? "Required" : "Optional"}</small></span>{slot.captured && <button type="button" className="icon-button" aria-label={`Remove ${slot.label} view`} onClick={() => void onRemove(index)}><Icon name="x" size={14} /></button>}</div>)}</div></Panel></div></div>;
+function PhotoCard({ slot, index, onUpload, onRemove, disabled }: { slot: CaptureSlot; index: number; onUpload: (index: number, file: File) => void; onRemove: (index: number) => void; disabled: boolean }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const previewUrl = slot.previewUrl ?? slot.asset?.signedUrl;
+  const handleFiles = (files: FileList | null) => { const file = files?.[0]; if (file) onUpload(index, file); };
+  return <div className={cn("scan-photo-card", slot.captured && "filled", dragging && "dragging")} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); handleFiles(event.dataTransfer.files); }}><input ref={inputRef} className="sr-only" type="file" aria-label={`Upload ${slot.label} photo`} accept="image/jpeg,image/png,image/webp" onChange={(event) => { handleFiles(event.target.files); event.target.value = ""; }} />{previewUrl ? <><img className="scan-photo-thumb" src={previewUrl} alt={`${slot.label} view`} /><button type="button" className="scan-photo-remove" aria-label={`Remove ${slot.label} view`} onClick={() => onRemove(index)}><Icon name="x" size={14} /></button><span className="scan-photo-badge"><Icon name="check" size={12} /> {slot.label}</span></> : <button type="button" className="scan-photo-drop" onClick={() => inputRef.current?.click()} disabled={disabled}><Icon name="upload" size={22} /><strong>{slot.label} view</strong><small>Tap to upload or drop a photo</small></button>}</div>;
 }
 
 function processingStageLabel(stage: ProcessingStage): string {
@@ -1666,6 +1770,7 @@ function localPreviewPath(value: unknown): string | null {
 }
 
 const LOCAL_REFERENCE_IMAGE = publicAssetPath("/media/3d-body-scan-reference-v3.png");
+const CANONICAL_BODY_MODEL = publicAssetPath("/media/canonical-human-mesh.glb");
 const MODEL_UNITS_PER_CM = 4.3 / 170;
 
 function clampNumber(value: number, minimum: number, maximum: number): number {
@@ -2411,9 +2516,11 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         gridMaterial.opacity = 0.52;
         scene.add(grid);
         let personalizedModel: THREE.Object3D | null = null;
-        if (modelUrl) {
+        const modelIsProvider = Boolean(modelUrl);
+        const modelSource = modelUrl ?? CANONICAL_BODY_MODEL;
+        if (modelSource) {
           try {
-            const response = await fetch(modelUrl, { credentials: "include" });
+            const response = await fetch(modelSource, { credentials: "include" });
             if (!response.ok) throw new Error(`HTTP ${response.status} loading 3D model asset`);
             const buffer = await response.arrayBuffer();
             const loader = new GLTFLoader();
@@ -2425,9 +2532,31 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
               return;
             }
             personalizedModel = gltf.scene;
+            if (!modelIsProvider) {
+              // The bundled canonical mesh ships with only POSITION data — no
+              // normals and no material. Recompute smooth normals and drape it
+              // in an even matte skin material so it renders as a clean human
+              // figure instead of the dark, self-shadowed default. Provider
+              // models keep their own morphed geometry and materials untouched.
+              personalizedModel.traverse((object) => {
+                const mesh = object as THREE.Mesh;
+                if (!mesh.isMesh) return;
+                const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+                geometry?.computeVertexNormals();
+                const previousMaterial = mesh.material as THREE.Material | THREE.Material[] | undefined;
+                mesh.material = new three.MeshStandardMaterial({
+                  color: 0xd8b39c,
+                  roughness: 0.72,
+                  metalness: 0,
+                  flatShading: false,
+                });
+                if (Array.isArray(previousMaterial)) previousMaterial.forEach((material) => material.dispose?.());
+                else previousMaterial?.dispose?.();
+              });
+            }
           } catch (loadError) {
             if (!active) return;
-            console.error("Personalized model failed to load; showing measured preview instead.", loadError);
+            console.error("3D body model failed to load; showing measured preview instead.", loadError);
             personalizedModel = null;
           }
         }
@@ -2695,13 +2824,6 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
   const modelHeightLabel = heightValue === null || heightValue === undefined ? "170 cm reference height" : `${modelHeightCm(heightValue, heightUnit).toFixed(1)} cm tall`;
   const focusedMeasurement = focusedMeasurementKey ? measurements.find((measurement) => measurement.key === focusedMeasurementKey) : undefined;
   const focusedMeasurementLabel = focusedMeasurement ? `${displayMeasurementKey(focusedMeasurement.key)} · ${displayMeasurementValue(focusedMeasurement)}` : "No measurement guide selected";
-  const focusedGuideKey = focusedMeasurementKey ? measurementGuideKey(focusedMeasurementKey) : null;
-  const focusedProviderContour = providerContourForGuideKey(guideGeometry, focusedGuideKey);
-  const guideQualityMessage = modelUrl && focusedMeasurement
-    ? focusedProviderContour
-      ? `${focusedProviderContour.kind === "line" ? "Provider guide" : "Provider contour guide"} · ${focusedProviderContour.source}`
-      : "Approximate guide — provider contour data was not returned for this measurement."
-    : null;
 
   return (
     <div className="model-3d-viewer">
@@ -2712,11 +2834,11 @@ function InteractiveBodyModel({ referenceImage, measurements = [], heightValue =
         {viewerState === "loading" && <div className="model-3d-loading" role="status" aria-live="polite"><span className="model-3d-spinner" aria-hidden="true" />Preparing your model…</div>}
         {viewerState === "fallback" && <div className="model-3d-fallback" role="status"><img src={referenceImage} alt="Reference visualization for the body measurement result" width={540} height={960} /><span>Interactive 3D is unavailable on this device. Showing the reference image.</span></div>}
         <span className="model-preview-badge"><Icon name="scan" size={13} /> Interactive 3D model</span>
-        <p className={cn("model-3d-focus-status", focusedMeasurement && "active")} id={focusStatusId} role="status" aria-live="polite">{focusedMeasurement ? "Guide shown: " + focusedMeasurementLabel : "Select a measurement name or row to show its guide."}</p>
-        {guideQualityMessage && <p className={cn("model-3d-guide-quality", focusedProviderContour ? "exact" : "approximate")} role="status">{guideQualityMessage}</p>}
+        <p className={cn("model-3d-focus-status", focusedMeasurement && "active")} id={focusStatusId} role="status" aria-live="polite">{focusedMeasurement ? "Guide shown: " + focusedMeasurementLabel : ""}</p>
       </div>
       <div className="model-3d-controls" role="group" aria-label="3D model controls"><button type="button" className={autoRotate ? "active" : ""} onClick={() => setAutoRotate((value) => !value)} disabled={viewerState !== "ready" || reducedMotion} aria-pressed={autoRotate}>{autoRotate ? "Pause rotation" : "Auto rotate"}<Icon name="rotate" size={14} /></button><button type="button" onClick={() => { hasUserInteractedRef.current = true; controlsRef.current?.reset(); renderRequestRef.current?.(); }} disabled={viewerState !== "ready"}><Icon name="refresh" size={14} />Reset view</button><button type="button" onClick={zoomIn} disabled={viewerState !== "ready"}><Icon name="zoom-in" size={14} />Zoom in</button><button type="button" onClick={zoomOut} disabled={viewerState !== "ready"}><Icon name="zoom-out" size={14} />Zoom out</button><button type="button" className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} disabled={viewerState !== "ready"} aria-pressed={showGuides}><Icon name="ruler" size={14} />{showGuides ? "Hide guides" : "Show guides"}</button></div>
         <p className="model-3d-hint" id={instructionsId}><Icon name="rotate" size={13} /> Click a colored guide or measurement row to highlight it. Drag to turn the model. Use Ctrl/⌘ + scroll, pinch, or the zoom buttons below to zoom. With keyboard focus, use the arrow keys, +/−, or Home.</p>
+      {!focusedMeasurement && <p className="model-3d-focus-hint">Select a measurement name or row to show its guide on the model.</p>}
       {reducedMotion && <p className="model-3d-motion-note" role="status">Auto-rotation is off because reduced motion is enabled.</p>}
     </div>
   );
@@ -2755,7 +2877,7 @@ function ModelViewer({ model, measurements = [], heightValue = null, heightUnit 
   }
   const providerReady = model?.status === "ready" && Boolean(model.model_url_or_path);
   const personalizedLoaded = providerReady && Boolean(assetUrl) && viewerState === "ready";
-  return <div className="model-empty model-empty-preview model-provider-preview">{providerReady && !assetUrl && !assetError ? <div className="model-no-result model-provider-loading-state" role="status" aria-live="polite"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><h3>Loading your personalized model</h3><p>Your secure model is being prepared. This view will update when it is ready.</p></div> : <InteractiveBodyModel referenceImage={LOCAL_REFERENCE_IMAGE} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} guideFractions={guideFractions} guideGeometry={guideGeometry} modelUrl={assetUrl} onSelectMeasurement={onSelectMeasurement} onViewerStateChange={handleViewerStateChange} />}<div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">{personalizedLoaded ? "PERSONALIZED BODY MODEL" : "MEASURED BODY PREVIEW"}</p><h3>{personalizedLoaded ? "Interactive 3D body model" : "Interactive model made from your measurements"}</h3><p>{personalizedLoaded ? "Your personalized model is loaded. Select a measurement to show its guide and compare it with the body." : assetError || (providerReady ? "The personalized model is unavailable on this device. Showing the measured preview instead." : "We made this visual model from your returned measurements. A personalized 3D model is not available for this scan.")}</p><Badge tone={personalizedLoaded ? "success" : "warning"}>{personalizedLoaded ? "Personalized model loaded" : "Measured preview · verify before tailoring"}</Badge>{personalizedLoaded && assetUrl && <a className="button button-secondary model-provider-link" href={assetUrl} target="_blank" rel="noreferrer">Open detailed model <Icon name="external" size={15} /></a>}</div></div></div>;
+  return <div className="model-empty model-empty-preview model-provider-preview">{providerReady && !assetUrl && !assetError ? <div className="model-no-result model-provider-loading-state" role="status" aria-live="polite"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><h3>Loading your personalized model</h3><p>Your secure model is being prepared. This view will update when it is ready.</p></div> : <InteractiveBodyModel referenceImage={LOCAL_REFERENCE_IMAGE} measurements={measurements} heightValue={heightValue} heightUnit={heightUnit} focusedMeasurementKey={focusedMeasurementKey} guideFractions={guideFractions} guideGeometry={guideGeometry} modelUrl={assetUrl} onSelectMeasurement={onSelectMeasurement} onViewerStateChange={handleViewerStateChange} />}<div className="model-preview-copy"><span className="model-empty-icon"><Icon name="scan" size={29} /></span><div><p className="eyebrow">{personalizedLoaded ? "PERSONALIZED BODY MODEL" : "MEASURED BODY PREVIEW"}</p><h3>{personalizedLoaded ? "Interactive 3D body model" : "Interactive model made from your measurements"}</h3><p>{personalizedLoaded ? "Your personalized model is loaded. Select a measurement to show its guide and compare it with the body." : assetError || (providerReady ? "The personalized model is unavailable on this device. Showing the measured preview instead." : "We made this visual model from your returned measurements. A personalized 3D model is not available for this scan.")}</p><Badge tone={personalizedLoaded ? "success" : "warning"}>{personalizedLoaded ? "Personalized model loaded" : "Measured preview · verify before tailoring"}</Badge></div></div></div>;
 }
 
 function CustomerMeasurements({ profile, onNavigate }: { profile: Profile; onNavigate: (page: string) => void }) {
@@ -2813,11 +2935,93 @@ function ProfilePage({ profile, onProfileChange }: { profile: Profile; onProfile
     setBusy(true);
     try { const updated = await updateProfile(profile.id, { first_name: firstName, last_name: lastName, phone: phone.trim() || null, email_notifications: emailNotifications, sms_notifications: smsNotifications, unit_system: unit }); onProfileChange(updated); setPhone(updated.phone ?? ""); setEmailNotifications(updated.email_notifications); setSmsNotifications(updated.sms_notifications); setNotice("Profile and notification preferences updated."); } catch (reason: unknown) { setError(readableError(reason)); } finally { setBusy(false); }
   };
-  const passwordReset = async () => {
+  return <div className="page-stack"><SectionHeader eyebrow="ACCOUNT" title="Profile" description="Keep your account details and choose how SukatAI should reach you about order updates." /><div className="profile-layout"><Panel className="profile-card"><div className="profile-identity"><Avatar profile={profile} size="lg" /><div><h2>{displayName(profile)}</h2><p>{profile.email}</p><Badge tone={profile.role === "admin" ? "blue" : profile.role === "dressmaker" ? "warning" : "teal"}>{profile.role}</Badge></div></div><form className="profile-fields" onSubmit={save}><Field label="First name" value={firstName} onChange={setFirstName} /><Field label="Last name" value={lastName} onChange={setLastName} /><div className="field"><label htmlFor="profile-unit">Measurement display</label><select id="profile-unit" name="unit-system" value={unit} onChange={(event) => setUnit(event.target.value as "cm" | "ftin")}><option value="cm">Centimetres</option><option value="ftin">Feet / inches</option></select></div><div className="field"><label htmlFor="profile-phone">Mobile number</label><input id="profile-phone" name="phone" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+639171234567" type="tel" autoComplete="tel" /><small className="field-hint">Use the international format so text delivery works reliably.</small></div><div className="field"><label htmlFor="profile-email">Email address</label><input id="profile-email" name="email" value={profile.email} disabled /></div><div className="notification-preferences"><p className="eyebrow">ORDER UPDATES</p><label className="consent-label"><input name="email-notifications" type="checkbox" checked={emailNotifications} onChange={(event) => setEmailNotifications(event.target.checked)} /><span>Email me when my order is ready for pickup.</span></label><label className="consent-label"><input name="sms-notifications" type="checkbox" checked={smsNotifications} onChange={(event) => setSmsNotifications(event.target.checked)} /><span>Text this number when my order is ready for pickup.</span></label></div>{notice && <div className="form-notice"><Icon name="check" size={15} /> {notice}</div>}{error && <InlineError message={error} />}<Button type="submit" disabled={busy} icon="check">{busy ? "Saving…" : "Save profile"}</Button></form></Panel><Panel className="settings-card"><p className="eyebrow">SECURITY</p><h2>Account access</h2><p>Change your password with a one-time code emailed to <strong>{profile.email}</strong>. We confirm the code before saving the new password.</p><div className="provider-row"><span><Icon name="mail" size={16} /> Verified email</span><Badge tone="success" dot>Confirmed</Badge></div><ProfilePasswordReset email={profile.email} /><div className="data-actions"><button type="button" onClick={() => void signOut()}><Icon name="logout" size={15} /> Sign out of this account</button></div></Panel></div></div>;
+}
+
+// Inline password reset for a signed-in user on the Profile page. Same OTP flow
+// as the signed-out ForgotPasswordPage (request a code, then confirm code + new
+// password), but self-contained so it needs no prop-drilling through Workspace.
+// The account email is fixed, so step 1 is a single button. A successful
+// confirm re-mints this account's session (all other devices are signed out).
+function ProfilePasswordReset({ email }: { email: string }) {
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [devCode, setDevCode] = useState<string | undefined>(undefined);
+  const [cooldown, setCooldown] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [done, setDone] = useState(false);
+  const codeReady = code.length === 6;
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
+
+  const sendCode = async () => {
     setError(""); setNotice("");
-    try { await sendPasswordReset(profile.email); setNotice("A password reset link has been sent to your email."); } catch (reason: unknown) { setError(readableError(reason)); }
+    setBusy(true);
+    try {
+      const info = await requestPasswordReset(email);
+      if (info?.dev_code) setDevCode(info.dev_code);
+      setOpen(true);
+      setNotice("A 6-digit reset code is on its way to your email.");
+      setCooldown(45);
+    } catch (reason: unknown) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
   };
-  return <div className="page-stack"><SectionHeader eyebrow="ACCOUNT" title="Profile" description="Keep your account details and choose how SukatAI should reach you about order updates." /><div className="profile-layout"><Panel className="profile-card"><div className="profile-identity"><Avatar profile={profile} size="lg" /><div><h2>{displayName(profile)}</h2><p>{profile.email}</p><Badge tone={profile.role === "admin" ? "blue" : profile.role === "dressmaker" ? "warning" : "teal"}>{profile.role}</Badge></div></div><form className="profile-fields" onSubmit={save}><Field label="First name" value={firstName} onChange={setFirstName} /><Field label="Last name" value={lastName} onChange={setLastName} /><div className="field"><label htmlFor="profile-unit">Measurement display</label><select id="profile-unit" name="unit-system" value={unit} onChange={(event) => setUnit(event.target.value as "cm" | "ftin")}><option value="cm">Centimetres</option><option value="ftin">Feet / inches</option></select></div><div className="field"><label htmlFor="profile-phone">Mobile number</label><input id="profile-phone" name="phone" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+639171234567" type="tel" autoComplete="tel" /><small className="field-hint">Use the international format so text delivery works reliably.</small></div><div className="field"><label htmlFor="profile-email">Email address</label><input id="profile-email" name="email" value={profile.email} disabled /></div><div className="notification-preferences"><p className="eyebrow">ORDER UPDATES</p><label className="consent-label"><input name="email-notifications" type="checkbox" checked={emailNotifications} onChange={(event) => setEmailNotifications(event.target.checked)} /><span>Email me when my order is ready for pickup.</span></label><label className="consent-label"><input name="sms-notifications" type="checkbox" checked={smsNotifications} onChange={(event) => setSmsNotifications(event.target.checked)} /><span>Text this number when my order is ready for pickup.</span></label></div>{notice && <div className="form-notice"><Icon name="check" size={15} /> {notice}</div>}{error && <InlineError message={error} />}<Button type="submit" disabled={busy} icon="check">{busy ? "Saving…" : "Save profile"}</Button></form></Panel><Panel className="settings-card"><p className="eyebrow">SECURITY</p><h2>Account access</h2><p>Your email is managed by Supabase Auth. Use a secure reset link when you need to change your password.</p><div className="provider-row"><span><Icon name="mail" size={16} /> Verified email</span><Badge tone="success" dot>Auth managed</Badge></div><Button variant="secondary" onClick={() => void passwordReset()} icon="lock">Send password reset link</Button><div className="data-actions"><button type="button" onClick={() => void signOut()}><Icon name="logout" size={15} /> Sign out of this account</button></div></Panel></div></div>;
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(""); setNotice("");
+    if (!codeReady) { setError("Enter the 6-digit code we emailed you."); return; }
+    if (password.length < 8) { setError("Use a password with at least 8 characters."); return; }
+    if (password !== confirm) { setError("Passwords do not match."); return; }
+    setBusy(true);
+    try {
+      await confirmPasswordReset(email, code, password);
+      setDone(true);
+      setOpen(false);
+      setCode(""); setPassword(""); setConfirm(""); setDevCode(undefined);
+      setNotice("Your password has been updated.");
+    } catch (reason: unknown) {
+      setError(readableError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return <>
+      {notice && done && <div className="form-notice"><Icon name="check" size={15} /> {notice}</div>}
+      {error && <InlineError message={error} />}
+      <Button variant="secondary" onClick={() => void sendCode()} disabled={busy} icon="lock">{busy ? "Sending…" : "Reset password"}</Button>
+    </>;
+  }
+
+  return <form className="auth-form profile-reset-form" onSubmit={submit}>
+    {devCode && <div className="verification-devcode">Dev mode — no email configured. Your code is <strong>{devCode}</strong></div>}
+    <div className="field verification-code-field">
+      <label htmlFor="profile-reset-code">6-digit reset code</label>
+      <input id="profile-reset-code" name="reset-code" inputMode="numeric" pattern="\d*" maxLength={6} autoComplete="one-time-code" className="verification-code-input" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" />
+    </div>
+    <Field label="New password" value={password} onChange={setPassword} placeholder="At least 8 characters" type="password" autoComplete="new-password" />
+    <Field label="Confirm new password" value={confirm} onChange={setConfirm} placeholder="Repeat your password" type="password" autoComplete="new-password" />
+    {notice && <div className="form-notice" role="status" aria-live="polite"><Icon name="check" size={15} /> {notice}</div>}
+    {error && <InlineError message={error} />}
+    <div className="verification-actions">
+      <Button type="submit" disabled={busy || !codeReady} icon={busy ? undefined : "check"}>{busy ? "Updating…" : "Save new password"}</Button>
+      <Button variant="secondary" type="button" onClick={() => void sendCode()} disabled={busy || cooldown > 0} icon="mail">{cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}</Button>
+      <button type="button" className="text-button" onClick={() => { setOpen(false); setError(""); setNotice(""); }}>Cancel</button>
+    </div>
+  </form>;
 }
 
 function OrganizationRequired({ role }: { role: "dressmaker" | "admin" }) {

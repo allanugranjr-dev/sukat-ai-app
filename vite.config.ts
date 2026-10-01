@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 function mobilePublicAssets() {
@@ -24,18 +24,12 @@ function mobilePublicAssets() {
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, ".", "");
-
   return {
     plugins: [react(), ...(mode === "mobile" ? [mobilePublicAssets()] : [])],
     base: mode === "xampp" ? "./" : "/",
     build: {
       outDir: mode === "node" ? "dist-node" : mode === "mobile" ? "dist-mobile" : "dist",
       copyPublicDir: mode !== "mobile",
-    },
-    define: {
-      "import.meta.env.NEXT_PUBLIC_SUPABASE_URL": JSON.stringify(env.NEXT_PUBLIC_SUPABASE_URL ?? ""),
-      "import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY": JSON.stringify(env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""),
     },
     server: {
       port: 5173,

@@ -1,5 +1,4 @@
-import type { Session } from "@supabase/supabase-js";
-import { isNodeMode, isXamppMode } from "./supabase";
+import { isNodeMode, isXamppMode, type Session } from "./supabase";
 import {
   nodeRequest,
   notifyNodeAuthStateChange,

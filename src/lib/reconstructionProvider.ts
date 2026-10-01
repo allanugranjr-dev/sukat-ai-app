@@ -1,4 +1,4 @@
-import { isLocalApiMode, requireSupabase, readableError } from "./supabase";
+import { readableError } from "./supabase";
 import { xamppRequest } from "./xampp";
 import type { ProcessingStage, ScanStatus } from "./types";
 
@@ -35,19 +35,11 @@ function payloadProgress(payload: ProcessingPayload | null): number | null {
 export async function requestScanProcessing(scanId: string): Promise<ProcessingRequestResult> {
   let data: ProcessingPayload | null;
   let error: unknown = null;
-  if (isLocalApiMode) {
-    try {
-      data = await xamppRequest<ProcessingPayload>("process_scan", { body: { scan_id: scanId } });
-    } catch (reason: unknown) {
-      data = null;
-      error = reason;
-    }
-  } else {
-    const response = await requireSupabase().functions.invoke("process-scan", {
-      body: { scan_id: scanId },
-    });
-    data = response.data as ProcessingPayload | null;
-    error = response.error;
+  try {
+    data = await xamppRequest<ProcessingPayload>("process_scan", { body: { scan_id: scanId } });
+  } catch (reason: unknown) {
+    data = null;
+    error = reason;
   }
   if (error) {
     return {
@@ -83,7 +75,7 @@ export function processingCopy(status: ScanStatus | ProcessingStage): { title: s
   if (status === "validating") {
     return {
       title: "Checking your photos",
-      body: "We are checking that the front and side views show one full body at a usable scale.",
+      body: "We are checking that the front and side views show a clear full-body or upper-body scan at a usable scale.",
     };
   }
   if (status === "processing") {
@@ -94,8 +86,8 @@ export function processingCopy(status: ScanStatus | ProcessingStage): { title: s
   }
   if (status === "failed") {
     return {
-      title: "Processing unavailable",
-      body: "No measurement result was saved. Review the error and try again after the processing service is available.",
+      title: "Processing stopped",
+      body: "No measurement result was saved from this attempt. Review the message and try again when the issue is resolved.",
     };
   }
   if (status === "completed" || status === "ready_to_share" || status === "ready_for_review" || status === "verified") {
@@ -105,7 +97,7 @@ export function processingCopy(status: ScanStatus | ProcessingStage): { title: s
     };
   }
   return {
-    title: "Processing queued",
-    body: "Your uploaded views are stored securely and waiting for the configured reconstruction provider. No measurements are shown until a valid result is returned. We will check automatically; use Check status if the provider takes longer than expected.",
+    title: "Preparing your scan",
+    body: "Your uploaded views are stored securely. Processing starts automatically and this page refreshes until a validated result is ready.",
   };
 }

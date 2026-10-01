@@ -36,6 +36,14 @@ function jsonParameter(value, fallback) {
   return JSON.stringify(value && typeof value === "object" ? value : fallback);
 }
 
+function isoDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const text = String(value);
+  const parsed = new Date(text.includes(" ") && !text.includes("T") ? `${text.replace(" ", "T")}Z` : text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 export async function findActiveScanAttempt(scanId) {
   const placeholders = ACTIVE_STATUSES.map(() => "?").join(",");
   return row(
@@ -145,9 +153,9 @@ export function scanAttemptResponse(attempt) {
     quality_issues: Array.isArray(qualityIssues) ? qualityIssues : [],
     error_code: attempt.error_code ?? null,
     error_message: attempt.error_message ? safeProcessingErrorMessage(attempt.error_message) : null,
-    started_at: attempt.started_at ? new Date(attempt.started_at).toISOString() : null,
-    completed_at: attempt.completed_at ? new Date(attempt.completed_at).toISOString() : null,
-    promoted_at: attempt.promoted_at ? new Date(attempt.promoted_at).toISOString() : null,
+    started_at: isoDate(attempt.started_at),
+    completed_at: isoDate(attempt.completed_at),
+    promoted_at: isoDate(attempt.promoted_at),
     is_promoted: Boolean(attempt.is_promoted),
   };
 }

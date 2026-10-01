@@ -159,12 +159,44 @@ export function normalizeProviderGuideGeometry(value) {
       source,
     };
   }
+  const lines = {};
+  if (value.lines !== undefined && value.lines !== null) {
+    if (typeof value.lines !== "object" || Array.isArray(value.lines)) {
+      throw new Error("The reconstruction provider returned invalid guide lines.");
+    }
+    for (const [key, rawLine] of Object.entries(value.lines)) {
+      if (!/^[a-z][a-z0-9_]{0,63}$/.test(key) || !rawLine || typeof rawLine !== "object" || Array.isArray(rawLine)) {
+        throw new Error("The reconstruction provider returned an invalid guide line key.");
+      }
+      const points = rawLine.points;
+      if (!Array.isArray(points) || points.length !== 2) {
+        throw new Error(`The reconstruction provider returned an invalid ${key} guide line.`);
+      }
+      const normalizedPoints = points.map((point) => {
+        if (!Array.isArray(point) || point.length !== 3 || point.some((coordinate) => typeof coordinate !== "number" || !Number.isFinite(coordinate) || Math.abs(coordinate) > 100)) {
+          throw new Error(`The reconstruction provider returned invalid points for the ${key} guide line.`);
+        }
+        return point.map(roundGuideNumber);
+      });
+      const source = typeof rawLine.source === "string" ? rawLine.source.trim() : "";
+      if (!source || source.length > 120) throw new Error(`The reconstruction provider returned no line source for ${key}.`);
+      const levelFraction = Number(rawLine.level_fraction);
+      const levelHeight = Number(rawLine.level_height_cm);
+      lines[key] = {
+        level_fraction: Number.isFinite(levelFraction) ? roundGuideNumber(levelFraction) : null,
+        level_height_cm: Number.isFinite(levelHeight) && levelHeight > 0 ? roundGuideNumber(levelHeight) : null,
+        points: normalizedPoints,
+        source,
+      };
+    }
+  }
   return {
     coordinate_system: "glb-y-up-right-handed",
     units: "m",
     up_axis: "y",
     calibrated_height_cm: roundGuideNumber(calibratedHeight),
     contours,
+    lines,
   };
 }
 
@@ -368,6 +400,10 @@ export async function processWithAiService(scan, assets, options = {}) {
   if (!Number.isFinite(height) || height <= 0) throw new Error("Enter a valid height before using the reconstruction provider.");
   form.append("height_cm", String(height));
   form.append("scan_id", String(scan.id));
+  // Sex is chosen by the person being scanned; the provider builds a
+  // male/female/neutral mesh from it instead of a fixed androgynous body.
+  const sex = ["male", "female", "neutral"].includes(String(scan.sex)) ? String(scan.sex) : "neutral";
+  form.append("sex", sex);
 
   let response;
   try {

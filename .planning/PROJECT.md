@@ -2,101 +2,81 @@
 
 ## What This Is
 
-SukatAI is an existing role-based body-measurement application for customers, tailors/dressmakers, and administrators. A customer provides front and side body views plus a real height reference. The system validates the views, produces calibrated body measurements and an interactive 3D body model, and makes the results available for tailor review and downstream order workflows.
-
-This is a brownfield completion and migration effort. The repository already contains the React/Vite application, local Node/MariaDB and XAMPP adapters, Supabase Auth/Postgres/Storage/Edge Functions, a CPU-first Python reconstruction service, and a Three.js model viewer. The work must improve the active scanner without rebuilding the product or discarding working features.
+SukatAI is a CPU-only AI body-measurement app for dressmakers and their customers.
+A customer takes two guided phone photos (front + side) plus their height; the
+service validates the photos, fits a parametric body on the CPU, and returns
+tailoring measurements for made-to-measure garments. It runs as a React web app
+and a Capacitor mobile app, backed by two interchangeable API runtimes (Node and
+PHP/XAMPP) over MariaDB, with a Python FastAPI microservice for the AI pipeline.
 
 ## Core Value
 
-Customers and tailors receive a useful, clearly qualified set of body measurements from a small number of private photos, with a 3D model whose visual guides correspond to the measurements actually produced by the provider.
+Trustworthy tailoring measurements from a simple phone scan — now shown **on the
+customer's own photo**, so they can see exactly where each measurement was taken
+and trust the numbers.
 
-## Users
+## Business Context
 
-- **Customers:** Sign in, capture or upload private front/side views, provide height, follow validation guidance, monitor processing, and review measurements and the interactive model.
-- **Tailors/dressmakers:** Review customer scans and measurements, use them for fitting/order work, and receive the existing invitation/access workflow.
-- **Administrators:** Manage users, roles, invitations, and operational records through the existing dashboard and backend permissions.
+Users are dressmakers/tailoring shops and their clients. Measurements feed the
+order and fitting workflow. Trust in the numbers is the product: a measurement the
+customer can visually verify against their own body is worth more than a number in
+a table or a line on a generic gray mannequin.
+
+## Requirements
+
+### Validated (already built)
+
+- Guided scan flow: consent → height → front/side capture → processing → results (`src/lib/scanFlow.ts`)
+- CPU image + pose validation (`ai-service/app/validation/`)
+- Anny parametric fit + CLAD/silhouette tailoring measurements calibrated to SnapMeasureAI (`ai-service/app/measurements/tailoring.py`)
+- GLB 3D mannequin viewer with 3D guide lines (Three.js, `src/App.tsx`)
+- Dual-runtime action-router API (Node `server/index.mjs`, PHP `xampp/api/index.php`) over MariaDB
+- Auth: cookie sessions + bcrypt + email OTP; Socket.IO scan-status streaming
+
+### Active (this milestone — "Real-photo measurement overlay")
+
+See `.planning/REQUIREMENTS.md`. In short: display the customer's real scan photo
+as the default result view, with each measurement drawn as a labeled guide line at
+its correct body position, shown on whichever view (front/side) reads clearest.
+Keep the existing 3D mannequin available behind a toggle.
+
+### Out of Scope (explicitly considered and dropped)
+
+- Photoreal digital twin / real-person-generated 3D model — **superseded by the pivot**
+- Cloud GPU processing — stays CPU-only
+- Garment try-on / cloth simulation / generated 3D garments
+- Face / close-up capture (scan stays height + front + side only)
+
+## Context
+
+- The AI pipeline already computes the data needed for a 2D overlay (per-measurement
+  vertical `level_fraction`, silhouette pixel dimensions, 2D pose landmarks) but only
+  exports 3D GLB-space guide geometry (`GuideGeometry` in `ai-service/app/schemas/api.py`).
+  The overlay milestone surfaces that discarded 2D data rather than computing anything new.
+- The client already fetches the customer's front/side photos (`asset.signedUrl`,
+  `previewUrl` in `src/App.tsx`) — the surface to draw on already exists.
+- `src/App.tsx` is a ~3,300-line monolith; changes concentrate there.
 
 ## Constraints
 
-- Preserve existing UI/UX, routes, authentication, Supabase configuration, database data, storage privacy, role boundaries, dashboards, orders, invitations, uploads, and working APIs.
-- Use migrations for schema changes; never reset Supabase or recreate the entire database.
-- Keep Node/MariaDB and XAMPP compatibility while maintaining the hosted Supabase path.
-- Optimize for the Lenovo ThinkPad L380 (Intel i5-8250U, 16 GB RAM, integrated graphics) on Windows 11 Pro. CPU-first operation is required; CUDA and large reconstruction models must not be required.
-- Use at most four active specialist agents. Agents must have disjoint ownership and must not rewrite unrelated code.
-- Keep body images and generated models private and authorized through the existing storage boundaries.
-- Do not publish a customer-facing accuracy percentage without independent, consented tape-measurement ground truth. Provider quality and fitting error are not accuracy.
-
-## Current System Context
-
-### Validated capabilities
-
-- ✓ React 19/Vite single-page application with customer, tailor/dressmaker, and administrator workflows — existing
-- ✓ Supabase authentication, Postgres schema/RLS, private Storage, and Edge Functions — existing
-- ✓ Local Node/Express + MariaDB runtime with Socket.IO and private local assets — existing
-- ✓ Optional PHP/MySQL XAMPP runtime — existing
-- ✓ Front/side scan upload and height capture workflow with processing lifecycle states — existing
-- ✓ FastAPI/Python CPU-first validation, silhouette reconstruction, calibration, measurements, and GLB export — existing
-- ✓ Three.js interactive model viewer with measurement selection and guide rendering — existing
-- ✓ Vitest and pytest test suites plus TypeScript and production build scripts — existing
-
-### Active requirements
-
-- [ ] The active scan path validates front/side images before expensive reconstruction and explains actionable pose or image-quality problems.
-- [ ] Measurements are calibrated to the user's supplied height and are persisted with provider/version/provenance metadata.
-- [ ] The provider and all backend adapters preserve nullable confidence honestly; the UI must not invent an accuracy or confidence percentage.
-- [ ] The system exposes process/input quality separately from independently measured accuracy and clearly labels estimates that lack ground truth.
-- [ ] The interactive 3D model uses the provider's measurement method and levels/contours so chest, waist, hip, and other guides align with the values shown to the user.
-- [ ] Processing is durable enough to report queued, running, ready, and failed states with safe retry behavior and without losing prior durable results unnecessarily.
-- [ ] Node, Supabase, and retained XAMPP paths stay contract-compatible for authentication, authorization, scans, assets, measurements, invitations, and orders.
-- [ ] The implementation remains practical on the target CPU and documents resource expectations, provider configuration, and local startup.
-- [ ] Automated tests cover measurement normalization, guide geometry, persistence, failure/retry behavior, backend boundaries, and the accuracy-validation limitation.
-- [ ] The release can be verified with reproducible typecheck, unit tests, Python tests, and production builds without requiring GPU-only dependencies.
-
-### Out of scope
-
-- Rebuilding SukatAI from scratch or replacing the existing product UI with an unrelated redesign.
-- Resetting Supabase, deleting existing data/tables, or removing working customer, tailor, administrator, order, invitation, or storage functionality.
-- Claiming “100% accurate,” a fabricated percentage, or a provider confidence score without a documented reference dataset and evaluation protocol.
-- Requiring CUDA, a GPU, large heavy reconstruction models, or a cloud-only runtime for local operation.
-- Making private body images or model assets publicly accessible to simplify rendering.
-- Replacing the existing backend abstraction with a single incompatible backend or adding unrelated features.
+- **CPU-only hard-lock.** Device is locked to `cpu`; never auto-select CUDA. Target
+  is Intel integrated-GPU laptops.
+- **Dual-runtime parity.** Any API contract change must be mirrored in both
+  `server/index.mjs` and `xampp/api/index.php`. PHP/XAMPP is a demo runtime and may
+  return empty overlay geometry, but the response shape must match.
+- **Desktop renders like mobile:** centered ~480px column via container queries (no iframe).
+- **Measurements are source-of-truth from the existing pipeline** — the overlay
+  visualizes the CLAD/silhouette-derived values, it does not recompute or replace them.
+- Anny gender macro is reversed: `gender=0.0` is MALE, `1.0` is FEMALE.
+- Change nothing in the 3D model / pipeline until the roadmap is agreed ("ask first").
 
 ## Key Decisions
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| Treat the repository as brownfield and migrate in place | Existing authentication, data, UI, and backend modes are valuable and must be preserved | Accepted |
-| Use front + side views + real user height as the active CPU-first scan contract | This is the governing migration brief and fits the target laptop | Accepted |
-| Keep Supabase as the hosted production path and Node/MariaDB/XAMPP as retained local paths | Users already depend on these runtimes and data boundaries | Accepted |
-| Keep confidence null and avoid an accuracy percentage until independent tape references exist | Image-derived fitting loss and process quality cannot prove real-world accuracy | Accepted |
-| Align 3D guides to provider-generated contours/levels rather than arbitrary ellipses | The current hip mismatch shows that display geometry and provider measurement methods can diverge | Pending implementation |
-| Use no more than four parallel specialist agents with disjoint ownership | Protect limited Codex usage and reduce merge conflicts | Accepted |
-| Prefer vertical end-to-end slices for implementation planning | Each phase should produce a testable customer-visible capability | Accepted |
-
-## Risks and Open Questions
-
-- The existing provider measures fitted meshes with CLAD contours while the browser can measure raw rendered mesh loops; an explicit shared contour/landmark contract is needed.
-- Existing saved scans may contain older guide metadata and require safe reprocessing or backward-compatible rendering.
-- The AI service keeps some result state in process memory, so restart recovery and durable job state need careful treatment without destabilizing the current local path.
-- Three backend implementations can drift unless shared contract tests or equivalent acceptance checks are added.
-- A true accuracy metric requires a consented reference-measurement dataset, a fixed measurement protocol, and a documented evaluation method; this project does not currently contain that dataset.
-
-## Evolution
-
-This document evolves at phase transitions and milestone boundaries.
-
-**After each phase transition** (via `$gsd-transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. “What This Is” still accurate? → Update if drifted
-
-**After each milestone** (via `$gsd-complete-milestone`):
-1. Review all sections
-2. Recheck the Core Value
-3. Audit Out of Scope reasons
-4. Update current users, feedback, metrics, and operational state
-
----
-*Last updated: 2026-09-02 after initialization*
+| Date | Decision | Why |
+|------|----------|-----|
+| 2026-09-25 | Pivot from photoreal 3D twin to measurement lines on the real photo | User: "dont make 3d model anymore just their real body with lines or the measurements" — simpler, more trustworthy, stays CPU-only |
+| 2026-09-25 | Display = labeled lines + values drawn on the real photo | Customer verifies each measurement against their own body |
+| 2026-09-25 | Show each measurement on its best view (front/side) | Some measurements (e.g. depth-based) read clearly only on one view |
+| 2026-09-25 | Keep the existing 3D mannequin behind a toggle (photo view is default) | Preserve existing work at no cost; photo is the primary experience |
+| 2026-09-25 | Derive 2D overlay coords from already-computed data (fractions/widths/pose) | No new models, no cloud, keeps the CPU-only guarantee |
+| 2026-09-25 | PHP runtime returns matching (possibly empty) overlay shape; client degrades gracefully | Dual-runtime parity without requiring the demo runtime to run the pipeline |

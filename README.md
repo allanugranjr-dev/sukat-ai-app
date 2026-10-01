@@ -182,6 +182,20 @@ The Node runtime uses Resend for email and Twilio for SMS. Keep these values in 
     TWILIO_FROM_NUMBER=+1...
     SUKATAI_PUBLIC_APP_URL=https://your-frontend.example.com
 
+Alternatively, the Node runtime can send email through any SMTP server (for example a Gmail account with an App Password) instead of Resend. Set the SMTP values in the same server-only `.env.node.local` file; when `SUKATAI_SMTP_HOST`, `SUKATAI_SMTP_USER`, and `SUKATAI_SMTP_PASS` are all present the provider auto-selects `smtp` without needing `SUKATAI_EMAIL_PROVIDER`:
+
+    SUKATAI_SMTP_HOST=smtp.gmail.com
+    SUKATAI_SMTP_PORT=587
+    SUKATAI_SMTP_USER=you@gmail.com
+    SUKATAI_SMTP_PASS=your-16-char-app-password
+    SUKATAI_EMAIL_FROM=SukatAI <you@gmail.com>
+
+Port 587 uses STARTTLS and port 465 uses implicit TLS automatically; set `SUKATAI_SMTP_SECURE=true|false` only to override. Gmail rejects a `From` that is not the authenticated mailbox, so if `SUKATAI_EMAIL_FROM` is omitted the sender defaults to `SUKATAI_SMTP_USER`. To create the App Password: enable 2-Step Verification on the Google account, open Google Account → Security → App passwords, generate one for "Mail", and paste the 16-character value (spaces removed) as `SUKATAI_SMTP_PASS`. Never commit `.env.node.local`; it is git-ignored.
+
+The per-IP throttle on auth endpoints keys on the real socket address by default. Only set `SUKATAI_TRUST_PROXY=true` when a reverse proxy that overwrites `X-Forwarded-For` sits in front of the Node server; leaving it off (the default) prevents a directly-exposed server from trusting a client-spoofed header. When marking a deployment production, set either `NODE_ENV=production` or `SUKATAI_ENV=production` — both put the Node runtime in production mode (which stops the OTP dev code from ever being returned in an API response).
+
+New customers must confirm a 6-digit code emailed to them before their account is usable. When no email provider is configured (`console`), the confirmation screen still works: the code is returned in the API response and shown on screen, but only outside production — so signups remain testable with zero email setup. Once SMTP or Resend is configured the code is emailed and never revealed on screen.
+
 If the provider values are left as `console`, the app still stores the invitation/order notification and shows it in the app, but it reports external delivery as `not_configured` instead of pretending a message was sent. Restart `npm run start:node` after changing the server environment.
 
 Create a versioned local backup of the MariaDB database and scan storage with:
@@ -248,7 +262,7 @@ The isolated `ai-service/` package provides the active FastAPI contract for Medi
 ```dotenv
 RECONSTRUCTION_PROVIDER=ai-service
 RECONSTRUCTION_API_URL=http://127.0.0.1:8000
-RECONSTRUCTION_TIMEOUT_MS=300000
+RECONSTRUCTION_TIMEOUT_MS=600000
 AI_SERVICE_API_KEY=local-only
 ```
 

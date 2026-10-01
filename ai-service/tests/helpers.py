@@ -19,3 +19,15 @@ def make_body_image(width: int = 480, height: int = 960) -> bytes:
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def make_half_body_image(width: int = 480, height: int = 640) -> bytes:
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((195, 35, 285, 145), fill="black")
+    draw.rounded_rectangle((155, 135, 325, 580), radius=35, fill="black")
+    draw.rectangle((105, 185, 155, 480), fill="black")
+    draw.rectangle((325, 185, 375, 480), fill="black")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()

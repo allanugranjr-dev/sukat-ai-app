@@ -65,7 +65,7 @@ export function getScanResultTruth(bundle: ScanBundle): ScanResultTruth {
 export function measurementProvenance(measurement: Measurement): string {
   const method = optionalText(measurement.method, 40);
   const source = optionalText(measurement.source, 120);
-  return [method, source].filter((value): value is string => value !== null).join(" · ") || "Provider details not reported";
+  return [method, source].filter((value): value is string => value !== null).join(" · ") || "Provider provenance unavailable";
 }
 
 const INTERNAL_ERROR_MARKERS = [

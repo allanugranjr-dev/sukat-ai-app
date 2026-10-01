@@ -62,10 +62,31 @@ export async function resendSignupConfirmation(email: string): Promise<Verificat
   return payload.verification ?? null;
 }
 
-export async function sendPasswordReset(email: string): Promise<void> {
-  await xamppRequest("password_reset_request", { body: { email: email.trim() } });
+// Step 1 of the reset flow: request a 6-digit code by email. The response uses
+// the same anti-enumeration shape as resend_otp — always `ok` with a
+// verification payload (dev_code only when the mailer is unconfigured outside
+// production), never revealing whether the account exists.
+export async function requestPasswordReset(email: string): Promise<VerificationInfo | null> {
+  const payload = await xamppRequest<{ ok?: boolean; verification?: VerificationInfo }>("password_reset_request", {
+    body: { email: email.trim() },
+  });
+  return payload.verification ?? null;
 }
 
+// Step 2: submit the code + new password. On success the server sets the new
+// password, marks the email verified, and signs the user in — so we broadcast
+// SIGNED_IN just like verify_otp.
+export async function confirmPasswordReset(email: string, code: string, password: string): Promise<AuthResponse> {
+  const payload = await xamppRequest<XamppAuthPayload>("password_reset_confirm", {
+    body: { email: email.trim(), code: code.trim(), password },
+  });
+  notifyXamppAuthStateChange("SIGNED_IN", payload.session);
+  return xamppAuthResponse(payload);
+}
+
+// Session-based password change, used by the dressmaker invitation acceptance
+// flow where the user is already signed in. The forgot-password path uses
+// requestPasswordReset + confirmPasswordReset instead.
 export async function updatePassword(password: string): Promise<User> {
   return xamppRequest<User>("password_update", { body: { password } });
 }

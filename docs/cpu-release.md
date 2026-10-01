@@ -30,6 +30,7 @@ The active CPU provider (`anny_clad`) is configured with the following bounds fo
 | `MAX_UPLOAD_BYTES` | `10485760` (10 MB) | Upload byte limit |
 | `ANNY_MAX_ITERATIONS` | `60` | Fitter iteration cap |
 | `ANNY_EARLY_STOP_DELTA` | `0.002` | Convergence threshold |
+| `MEASUREMENT_CALIBRATION_JSON` | *(built-in reference factors)* | Optional JSON overrides for the post-CLAD measurement calibration factors (keyed by CLAD key, e.g. `bust_cm`, `waist_cm`) |
 | `SMPLX_MODEL_DIR` | `./models/smplx` | SMPL-X model assets |
 | `PIXIE_MODEL_DIR` | `./models/pixie` | PIXIE model assets |
 | `ANTHROPOMETRY_DIR` | `./vendor/SMPL-Anthropometry` | Anthropometry adapter assets |

@@ -13,6 +13,7 @@ describe("adapter contract: result shape consistency", () => {
       status: "ready_to_share",
       height_value: 170,
       height_unit: "cm",
+      sex: "neutral",
       consent_at: "2026-09-01T10:00:00.000Z",
       capture_source: "upload",
       processing_provider: "cpu-provider-v1.2",
@@ -177,6 +178,7 @@ describe("adapter contract: legacy scan handling", () => {
       status: "ready_for_review",
       height_value: 165,
       height_unit: "cm",
+      sex: "neutral",
       consent_at: "2026-08-15T10:00:00.000Z",
       capture_source: "upload",
       processing_provider: null,
@@ -241,7 +243,7 @@ describe("adapter contract: legacy scan handling", () => {
   it("measurement provenance shows fallback for missing method/source", () => {
     const measurement = legacyScanBundle.measurements[0];
     const provenance = measurementProvenance(measurement);
-    expect(provenance).toBe("Provider details not reported");
+    expect(provenance).toBe("Provider provenance unavailable");
   });
 });
 
@@ -273,6 +275,7 @@ describe("adapter contract: cross-backend JSON shape", () => {
       status: "ready_for_review",
       height_value: 170,
       height_unit: "cm",
+      sex: "neutral",
       consent_at: null,
       capture_source: "upload",
       processing_provider: "test-provider",

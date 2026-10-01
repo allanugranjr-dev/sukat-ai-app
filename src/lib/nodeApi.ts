@@ -1,6 +1,5 @@
 import { io, type Socket } from "socket.io-client";
-import type { Session } from "@supabase/supabase-js";
-import { isNodeMode } from "./supabase";
+import { isNodeMode, type Session } from "./supabase";
 
 export type NodeRequestOptions = {
   method?: "GET" | "POST";

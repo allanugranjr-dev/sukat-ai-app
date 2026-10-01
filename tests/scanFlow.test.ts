@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isHeightValid, previousScanPosition, validateUpload } from "../src/lib/scanFlow";
+import { customerScanJourney, isHeightValid, previousScanPosition, validateUpload } from "../src/lib/scanFlow";
 import { processingCopy } from "../src/lib/reconstructionProvider";
 
 describe("scan flow guardrails", () => {
@@ -26,9 +26,33 @@ describe("scan flow guardrails", () => {
   });
 
   it("keeps provider-backed processing honest while queued", () => {
-    expect(processingCopy("processing_queued").title).toBe("Processing queued");
-    expect(processingCopy("processing_queued").body).toContain("No measurements are shown");
-    expect(processingCopy("processing_queued").body).toContain("Check status");
-    expect(processingCopy("failed").title).toBe("Processing unavailable");
+    expect(processingCopy("processing_queued").title).toBe("Preparing your scan");
+    expect(processingCopy("processing_queued").body).toContain("starts automatically");
+    expect(processingCopy("processing_queued").body).toContain("refreshes");
+    expect(processingCopy("failed").title).toBe("Processing stopped");
+    expect(processingCopy("failed").body).toContain("No measurement result was saved");
+  });
+
+  it("puts the newest actionable scan ahead of an older completed result", () => {
+    expect(customerScanJourney("needs_recapture")).toMatchObject({
+      badge: "NEW PHOTOS NEEDED",
+      actionLabel: "Replace photos",
+      destination: "scan",
+    });
+    expect(customerScanJourney("failed")).toMatchObject({
+      badge: "SCAN NEEDS ATTENTION",
+      actionLabel: "Fix scan",
+      destination: "scan",
+    });
+    expect(customerScanJourney("processing")).toMatchObject({
+      badge: "SCAN PROCESSING",
+      actionLabel: "View processing",
+      destination: "scan",
+    });
+    expect(customerScanJourney("verified")).toMatchObject({
+      badge: "MEASUREMENTS READY",
+      actionLabel: "Open measurements",
+      destination: "measurements",
+    });
   });
 });

@@ -47,6 +47,7 @@ export interface Scan {
   status: ScanStatus;
   height_value: number | null;
   height_unit: "cm" | "ftin";
+  sex: "male" | "female" | "neutral";
   consent_at: string | null;
   capture_source: CaptureSource;
   processing_provider: string | null;

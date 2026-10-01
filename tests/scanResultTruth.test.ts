@@ -11,6 +11,7 @@ function bundle(overrides: Record<string, unknown> = {}): ScanBundle {
       status: "ready_for_review",
       height_value: 170,
       height_unit: "cm",
+      sex: "neutral",
       consent_at: "2026-09-02T00:00:00.000Z",
       capture_source: "upload",
       processing_provider: "live-measurements-api",
@@ -89,7 +90,7 @@ describe("scan result truth", () => {
 
   it("labels missing measurement provenance and formats view-specific issues safely", () => {
     const measurement = { method: null, source: null } as Measurement;
-    expect(measurementProvenance(measurement)).toBe("Provider details not reported");
+    expect(measurementProvenance(measurement)).toBe("Provider provenance unavailable");
     expect(qualityIssueText({ view: "front", message: "stand naturally" })).toBe("front: stand naturally");
     expect(qualityIssueText({ error: "provider rejected the view" })).toBe("provider rejected the view");
   });

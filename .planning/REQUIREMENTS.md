@@ -1,97 +1,62 @@
-# Requirements: SukatAI
+# Requirements: SukatAI — Real-photo measurement overlay
 
-**Core Value:** Customers and tailors receive a useful, clearly qualified set of body measurements from private front/side photos, with a 3D model whose guides correspond to the provider measurements actually shown.
+**Milestone goal:** Stop generating any 3D body model as the primary result. Instead
+show the customer's real scan photo with each measurement drawn as a labeled guide
+line at its correct body position, on whichever view reads clearest. Keep the
+existing 3D mannequin behind a toggle.
 
-## v1 Requirements
+Requirements the existing app already satisfies (scan flow, validation, measurement
+computation, dual-runtime API, auth) are documented in `.planning/PROJECT.md` under
+"Validated" and are not re-listed here.
 
-### Measurement Truth and Provenance
+## v1 (this milestone)
 
-- [ ] **TRUTH-01**: Each published measurement includes its unit, measurement method, source/provider, processing version, and scan identifier.
-- [ ] **TRUTH-02**: The result view distinguishes input/process quality and provider diagnostics from independently measured real-world accuracy.
-- [ ] **TRUTH-03**: When no calibrated provider confidence or independent reference measurement exists, the customer-facing result shows an explicit unreported/ not independently validated state instead of an invented percentage.
-- [ ] **TRUTH-04**: An internal evaluation path can compare a provider result with consented tape-measurement references and report per-measurement error without changing production customer values.
+### Overlay display (OVL)
 
-### Input Validation
+- **OVL-01** — The customer's real scan photo is the default result view (replacing the 3D mannequin as default).
+- **OVL-02** — Each returned measurement is drawn as a guide line on the photo at its correct body position.
+- **OVL-03** — Each guide line is labeled with the measurement name, value, and unit (e.g. "Waist 78 cm"), respecting the user's cm/ftin preference.
+- **OVL-04** — Each measurement is shown on whichever captured view (front or side) reads clearest for it ("best view per measurement").
+- **OVL-05** — The overlay stays aligned to the body as the photo scales, on both desktop (centered ~480px column) and mobile.
+- **OVL-06** — A toggle switches between the photo overlay view and the existing 3D mannequin view.
 
-- [ ] **VALID-01**: Before expensive fitting begins, the system validates that front and side assets are decodable, within configured size limits, contain a measurable full body, and satisfy the required pose rules.
-- [ ] **VALID-02**: When validation fails, the customer sees a specific view-level correction message and the scan is not published as ready with measurements.
+### Pipeline / coordinates (PIPE)
 
-### Provider-Aligned 3D Guides
+- **PIPE-01** — The AI service emits, per measurement, 2D overlay geometry (guide-line endpoints) in normalized image coordinates, keyed to the source view (front/side), plus each source view's pixel dimensions.
+- **PIPE-02** — Overlay coordinates are derived on the CPU from data already computed (silhouette `level_fraction`/widths + pose landmarks). No new heavy models, no cloud, no CUDA.
+- **PIPE-03** — The 2D overlay payload is validated by a Pydantic schema (mirroring `GuideGeometry`) with finite/bounded coordinate checks.
 
-- [ ] **GEOM-01**: The provider result contains the coordinate system and exact level/contour metadata used to derive each displayed circumference guide.
-- [ ] **GEOM-02**: The existing interactive viewer renders provider-authored guides at the same calibrated model scale and keeps guide selection synchronized with measurement rows.
-- [ ] **GEOM-03**: Older scans with missing or older guide metadata remain loadable, are visibly version-qualified, and never present a fallback guide as measurement-exact.
+### Contract / data (API)
 
-### Processing Lifecycle and Retry
+- **API-01** — The scan-result payload delivers the 2D overlay geometry to the client on the Node runtime.
+- **API-02** — The client can retrieve the customer's front/side photos to display (existing `asset.signedUrl` / asset endpoint).
+- **API-03** — Overlay geometry persists with the scan result, so re-opening a completed scan shows the overlay without reprocessing.
 
-- [ ] **LIFE-01**: A scan has durable validated, processing, ready, failed, and retrying states with an attempt identifier and provider/version information.
-- [ ] **LIFE-02**: Retrying a scan is idempotent and does not create duplicate published measurements or models.
-- [ ] **LIFE-03**: A failed replacement attempt preserves the last durable ready result when one exists, while showing the failed attempt and an actionable retry state.
-- [ ] **LIFE-04**: Provider, storage, timeout, and persistence failures resolve to user-readable status messages without exposing secrets or internal stack traces.
+### Parity / resilience (PAR)
 
-### Backend and Privacy Compatibility
+- **PAR-01** — The PHP/XAMPP runtime returns the same response shape; overlay geometry may be empty on the demo runtime.
+- **PAR-02** — When overlay geometry is absent or incomplete, the client falls back to showing the photo plus a measurement list (no lines) without crashing.
 
-- [ ] **BACK-01**: Node/MariaDB and hosted Supabase paths accept, validate, persist, and return the same measurement/provenance/guide contract for the updated scan flow.
-- [ ] **BACK-02**: The retained XAMPP compatibility path does not break existing authentication, role authorization, uploads, results, invitations, orders, or private local asset access.
-- [ ] **PRIV-01**: Body images and generated models remain private and are only served through existing authorization-checked local handlers or time-limited hosted access.
-- [ ] **PRIV-02**: Processing logs and customer-facing errors do not expose credentials, private object paths, signed URLs, or unrelated user data.
+## v2 (deferred, not this milestone)
 
-### CPU Operation and Verification
-
-- [ ] **PERF-01**: The active provider bounds decoded image dimensions, memory use, and processing concurrency so the two-view scan is practical on the target Lenovo ThinkPad L380 without CUDA.
-- [ ] **QA-01**: Automated tests cover provider normalization, nullable confidence/accuracy behavior, validation failures, guide geometry/calibration, attempt promotion/retry, and backend contract compatibility.
-- [ ] **QA-02**: The repository documents reproducible local provider/backend startup and provides passing typecheck, unit tests, Python tests, and production builds for the supported paths.
-
-## v2 Requirements
-
-Deferred until the v1 contract and validation foundation are stable:
-
-- **EVAL-01**: Publish aggregate accuracy/error summaries to customers or staff after a consented, representative reference dataset and protocol are approved.
-- **SCALE-01**: Replace the local serialized queue with a shared distributed job queue and horizontally scalable CPU workers.
-- **MOBILE-01**: Add a dedicated automated native Android journey suite covering camera permissions, upload retries, offline transitions, and deep-link behavior.
-- **MODEL-01**: Add new body-model families or high-fidelity reconstruction modes beyond the current bounded CPU provider after benchmark evidence justifies the cost.
+- Adjustable/draggable line positions for dressmaker correction
+- Show all measurements on all available views simultaneously
+- Back-view overlay
+- Export an annotated measurement image to share with the dressmaker
 
 ## Out of Scope
 
-- Rebuilding or broadly redesigning the existing SukatAI UI, navigation, role dashboards, authentication, orders, invitations, or forms.
-- Resetting Supabase, recreating the database, deleting user data, or making private body assets public.
-- Claiming a universal or customer-specific accuracy percentage from image quality, fitting loss, or a synthetic model comparison.
-- Requiring CUDA, a discrete GPU, or a large reconstruction model for the target local workflow.
-- Introducing a second competing active scanner implementation or bypassing the established browser/backend adapter boundaries.
-
-## Definition of Done
-
-- All v1 requirements mapped to exactly one roadmap phase.
-- Existing authentication, storage privacy, roles, database data, routes, and supported backend modes remain functional.
-- A known front/side fixture produces a durable result whose displayed guide contract matches the provider method and calibrated model coordinates.
-- Invalid pose/input and provider/storage failures are actionable and retryable without destructive loss of prior ready output.
-- No unsupported accuracy percentage is displayed.
-- Typecheck, Vitest, Python tests, and available production builds pass; targeted manual verification is documented.
+- Photoreal digital twin / real-person-generated 3D model
+- Cloud GPU processing
+- Garment try-on, cloth simulation, generated 3D garments
+- Face / close-up capture
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| TRUTH-01 | Phase 1 | Implemented locally; hosted gate pending |
-| TRUTH-02 | Phase 1 | Implemented locally |
-| TRUTH-03 | Phase 1 | Implemented locally |
-| TRUTH-04 | Phase 3 | Pending |
-| VALID-01 | Phase 1 | Implemented locally |
-| VALID-02 | Phase 1 | Implemented locally |
-| GEOM-01 | Phase 1 | Implemented locally |
-| GEOM-02 | Phase 1 | Implemented locally |
-| GEOM-03 | Phase 2 | Pending |
-| LIFE-01 | Phase 1 | Implemented locally; hosted gate pending |
-| LIFE-02 | Phase 1 | Implemented locally |
-| LIFE-03 | Phase 1 | Implemented locally |
-| LIFE-04 | Phase 1 | Implemented locally |
-| BACK-01 | Phase 2 | Pending |
-| BACK-02 | Phase 2 | Pending |
-| PRIV-01 | Phase 1 | Implemented locally |
-| PRIV-02 | Phase 1 | Implemented locally |
-| PERF-01 | Phase 3 | Pending |
-| QA-01 | Phase 3 | Pending |
-| QA-02 | Phase 3 | Pending |
-
----
-*Requirements defined: 2026-09-02*
+| Requirement | Phase | Primary files |
+|-------------|-------|---------------|
+| PIPE-01, PIPE-02, PIPE-03 | 1 | `ai-service/app/pipeline.py`, `ai-service/app/measurements/tailoring.py`, `ai-service/app/schemas/api.py` |
+| API-01, API-03, PAR-01 | 2 | `server/index.mjs`, `server/aiService.mjs`, `xampp/api/index.php`, `xampp/database/sukatai.sql` |
+| API-02 | 2 | `server/index.mjs`, `src/lib/nodeApi.ts` |
+| OVL-01..05, PAR-02 | 3 | `src/App.tsx`, `src/lib/types.ts`, `src/styles.css` |
+| OVL-06 | 4 | `src/App.tsx` |

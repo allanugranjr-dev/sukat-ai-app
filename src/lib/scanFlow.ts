@@ -1,3 +1,5 @@
+import type { ScanStatus } from "./types";
+
 export type ScanStep = "prep" | "height" | "capture" | "processing" | "results";
 
 export const scanSteps: Array<{ key: ScanStep; label: string }> = [
@@ -7,6 +9,106 @@ export const scanSteps: Array<{ key: ScanStep; label: string }> = [
   { key: "processing", label: "Processing" },
   { key: "results", label: "Review" },
 ];
+
+export type CustomerScanJourney = {
+  badge: string;
+  badgeTone: "success" | "warning" | "danger" | "teal" | "blue";
+  title: string;
+  body: string;
+  actionLabel: string;
+  destination: "scan" | "scan:new" | "measurements";
+};
+
+/**
+ * Choose one clear, truthful dashboard action for the customer's newest scan.
+ * An actionable scan always takes priority over an older completed record.
+ */
+export function customerScanJourney(status: ScanStatus | null): CustomerScanJourney {
+  switch (status) {
+    case "draft":
+      return {
+        badge: "SCAN IN PROGRESS",
+        badgeTone: "teal",
+        title: "Finish setting up your scan.",
+        body: "Add your height, then upload your front and side views when you are ready.",
+        actionLabel: "Continue scan",
+        destination: "scan",
+      };
+    case "uploaded":
+      return {
+        badge: "PHOTOS READY",
+        badgeTone: "teal",
+        title: "Your photos are ready to submit.",
+        body: "Review the front and side views, then send them for processing when they look right.",
+        actionLabel: "Review photos",
+        destination: "scan",
+      };
+    case "processing_queued":
+    case "processing":
+      return {
+        badge: "SCAN PROCESSING",
+        badgeTone: "blue",
+        title: "We are checking your photos.",
+        body: "Your scan updates automatically. You can open it at any time to see the latest saved status.",
+        actionLabel: "View processing",
+        destination: "scan",
+      };
+    case "needs_recapture":
+      return {
+        badge: "NEW PHOTOS NEEDED",
+        badgeTone: "warning",
+        title: "Your scan needs replacement photos.",
+        body: "Open the scan to replace the views that need another try before processing resumes.",
+        actionLabel: "Replace photos",
+        destination: "scan",
+      };
+    case "failed":
+      return {
+        badge: "SCAN NEEDS ATTENTION",
+        badgeTone: "danger",
+        title: "Your scan needs another try.",
+        body: "Open the scan to see the saved feedback, retry it, or replace the photos before trying again.",
+        actionLabel: "Fix scan",
+        destination: "scan",
+      };
+    case "ready_to_share":
+      return {
+        badge: "RESULT READY",
+        badgeTone: "success",
+        title: "Your measurements are ready to review.",
+        body: "Review the returned measurements before sharing them with your dressmaker.",
+        actionLabel: "Review measurements",
+        destination: "scan",
+      };
+    case "ready_for_review":
+      return {
+        badge: "WITH YOUR DRESSMAKER",
+        badgeTone: "success",
+        title: "Your measurements are ready for review.",
+        body: "Your dressmaker can now check this result and use it for the next fitting step.",
+        actionLabel: "Open result",
+        destination: "scan",
+      };
+    case "verified":
+      return {
+        badge: "MEASUREMENTS READY",
+        badgeTone: "success",
+        title: "Your checked measurements are ready.",
+        body: "Open the measurement record whenever you need it for an order or fitting.",
+        actionLabel: "Open measurements",
+        destination: "measurements",
+      };
+    default:
+      return {
+        badge: "ACCOUNT READY",
+        badgeTone: "teal",
+        title: "Start a clearer scan.",
+        body: "Create a guided scan when you are ready. Results appear after the service checks your photos.",
+        actionLabel: "Start a scan",
+        destination: "scan:new",
+      };
+  }
+}
 
 /** Parse the supported feet/inches entry formats into total inches. */
 export function parseHeightInches(value: string): number | null {

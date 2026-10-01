@@ -35,6 +35,9 @@ export async function ensureDatabase() {
   }
 }
 
+// Returns true when the column was newly added, false when it already existed.
+// Callers use the return value to run one-time data migrations exactly once
+// (on the boot that first creates the column) rather than on every startup.
 async function ensureColumn(tableName, columnName, definition) {
   const existing = await pool.query(
     "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1",
@@ -42,7 +45,9 @@ async function ensureColumn(tableName, columnName, definition) {
   );
   if (existing.length === 0) {
     await pool.query(`ALTER TABLE ${safeDatabaseIdentifier(tableName)} ADD COLUMN ${safeDatabaseIdentifier(columnName)} ${definition}`);
+    return true;
   }
+  return false;
 }
 
 async function ensureIndex(tableName, indexName, definition) {
@@ -77,19 +82,34 @@ export async function initializeDatabase({ applySchema = true } = {}) {
   // Email-OTP account verification columns. Added idempotently so an existing
   // populated users table gains them without data loss (the schema file only
   // runs CREATE TABLE IF NOT EXISTS and never alters an existing table).
-  await ensureColumn("users", "email_verified", "TINYINT(1) NOT NULL DEFAULT 0 AFTER reset_expires_at");
+  const emailVerifiedAdded = await ensureColumn("users", "email_verified", "TINYINT(1) NOT NULL DEFAULT 0 AFTER reset_expires_at");
   await ensureColumn("users", "verified_at", "DATETIME NULL AFTER email_verified");
   await ensureColumn("users", "otp_hash", "CHAR(64) NULL AFTER verified_at");
   await ensureColumn("users", "otp_expires_at", "DATETIME NULL AFTER otp_hash");
   await ensureColumn("users", "otp_attempts", "TINYINT NOT NULL DEFAULT 0 AFTER otp_expires_at");
   await ensureColumn("users", "otp_last_sent_at", "DATETIME NULL AFTER otp_attempts");
-  // One-time backfill: every account that predates the OTP feature is marked
-  // verified so only NEW signups are gated. A pending signup always carries a
-  // non-null otp_hash, so it is never caught here. Idempotent (no-op once done).
-  await pool.query(
-    "UPDATE users SET email_verified = 1, verified_at = COALESCE(verified_at, created_at) WHERE email_verified = 0 AND otp_hash IS NULL",
-  );
+  // Password-reset OTP bookkeeping. The reset code hash + expiry reuse the
+  // long-existing reset_token_hash / reset_expires_at columns; these two add the
+  // same lockout + cooldown protection the email-verification OTP has.
+  await ensureColumn("users", "reset_attempts", "TINYINT NOT NULL DEFAULT 0 AFTER reset_expires_at");
+  await ensureColumn("users", "reset_last_sent_at", "DATETIME NULL AFTER reset_attempts");
+  // One-time backfill, gated on the boot that FIRST creates email_verified.
+  // Every account that predates the OTP feature is marked verified so only NEW
+  // signups are gated. This must NOT run on later boots: a genuinely-unverified
+  // account can reach the state (email_verified = 0 AND otp_hash IS NULL) after
+  // its code expires (verify_otp clears otp_hash), and re-running the backfill
+  // would silently verify it — defeating the gate. Because the column exists on
+  // every subsequent startup, this block is skipped and that state is preserved.
+  if (emailVerifiedAdded) {
+    await pool.query(
+      "UPDATE users SET email_verified = 1, verified_at = COALESCE(verified_at, created_at) WHERE otp_hash IS NULL",
+    );
+  }
   await ensureColumn("notifications", "event_key", "VARCHAR(180) NULL AFTER metadata");
+  // Selectable body type for the reconstruction pipeline. Added idempotently so
+  // an existing scans table gains it without a destructive re-import; the Anny
+  // fitter maps male/female/neutral to gender + cupsize macros.
+  await ensureColumn("scans", "sex", "VARCHAR(10) NOT NULL DEFAULT 'neutral' AFTER height_unit");
   await ensureColumn("scans", "processing_attempts", "INT NOT NULL DEFAULT 0 AFTER processing_version");
   await ensureColumn("scans", "processing_attempt_id", "CHAR(36) NULL AFTER processing_attempts");
   await ensureColumn("scans", "processing_started_at", "DATETIME NULL AFTER processing_attempts");

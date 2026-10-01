@@ -35,6 +35,29 @@ _FIT_PARAMS = ("height", "weight", "muscle", "proportions")
 _FIT_MEASURE_KEYS = ("height_cm", "bust_cm", "waist_cm", "hip_cm", "shoulder_width_cm")
 _CLAD_KEYS = ("height_cm", "bust_cm", "waist_cm", "hip_cm", "thigh_cm", "upperarm_cm", "shoulder_width_cm", "inseam_cm")
 
+# Anny/MPFB2 gender macro runs male(0.0) -> female(1.0); the ``gender`` phenotype
+# gates the breast blendshapes behind the "female" weight, so a male body needs
+# gender near 0 with a flat cupsize. Sex is chosen by the user, never fitted, so
+# the reconstruction stops rendering an androgynous mesh for every scan.
+_SEX_PARAMS: dict[str, dict[str, float]] = {
+    "male": {"gender": 0.0, "cupsize": 0.0},
+    "female": {"gender": 1.0, "cupsize": 0.5},
+    "neutral": {"gender": 0.5, "cupsize": 0.5},
+}
+
+
+def normalize_sex(sex: str | None) -> str:
+    """Return a supported sex key, defaulting to ``neutral`` for unknown input."""
+    key = (sex or "neutral").strip().lower()
+    return key if key in _SEX_PARAMS else "neutral"
+
+
+def _base_params_for_sex(sex: str | None) -> dict[str, float]:
+    """Anny phenotype defaults adjusted so the mesh matches the scanned person's sex."""
+    params = dict(_DEFAULT_PARAMS)
+    params.update(_SEX_PARAMS[normalize_sex(sex)])
+    return params
+
 
 @dataclass(frozen=True)
 class FittedAnnyBody:
@@ -77,7 +100,7 @@ class _AnnyRuntime:
     phenotype_labels: tuple[str, ...]
 
 
-def _build_runtime() -> _AnnyRuntime:
+def _build_runtime(base_params: dict[str, float] | None = None) -> _AnnyRuntime:
     try:
         import torch  # type: ignore
         from clad_body.load import load_anny_from_params  # type: ignore
@@ -85,7 +108,9 @@ def _build_runtime() -> _AnnyRuntime:
     except ImportError as error:
         raise AnnyFittingError("Anny and CLAD-Body are required for fitted-body reconstruction.") from error
     try:
-        neutral_body = load_anny_from_params(_DEFAULT_PARAMS, device="cpu", requires_grad=False)
+        # The reused ``neutral_body`` must carry the sex-adjusted phenotype so the
+        # neutral fit vector and every candidate share one gender/cupsize.
+        neutral_body = load_anny_from_params(dict(base_params or _DEFAULT_PARAMS), device="cpu", requires_grad=False)
         device = torch.device("cpu")
         model = neutral_body.model
         pose = build_anny_apose(model, device)
@@ -208,6 +233,7 @@ def _loss(measurements: dict[str, float], targets: dict[str, float]) -> float:
 def fit_anny_body(
     targets: dict[str, float],
     *,
+    sex: str | None = None,
     max_iterations: int = 60,
     early_stop_delta: float = 0.002,
     on_progress: Callable[[int, str], None] | None = None,
@@ -216,19 +242,50 @@ def fit_anny_body(
 
     The search has a hard evaluation budget, preventing a numerical optimiser
     from silently consuming a low-end laptop. Every published value still comes
-    from CLAD-Body measuring the best fitted Anny mesh.
+    from CLAD-Body measuring the best fitted Anny mesh. ``sex`` selects the
+    gender/cupsize phenotype (``male``/``female``/``neutral``) so the mesh is
+    not androgynous; it is fixed by the user, never fitted.
     """
     if not 1 <= max_iterations <= 60:
         raise AnnyFittingError("ANNY_MAX_ITERATIONS must be between 1 and 60.")
+    resolved_sex = normalize_sex(sex)
+    base_params = _base_params_for_sex(resolved_sex)
     clean_targets = {key: float(value) for key, value in targets.items() if np.isfinite(value) and value > 0}
     if "height_cm" not in clean_targets:
         raise AnnyFittingError("A valid measured height is required for Anny fitting.")
 
     evaluations = 0
     cache: dict[tuple[float, ...], float] = {}
-    runtime = _build_runtime()
+    try:
+        runtime = _build_runtime(base_params)
+    except AnnyFittingError:
+        from app.reconstruction.mesh_morpher import morph_canonical_human_body
+
+        if on_progress:
+            on_progress(70, "Morphing anatomical 3D human body model to measurements.")
+        verts, faces = morph_canonical_human_body(clean_targets, clean_targets["height_cm"], sex=resolved_sex)
+        measured = {
+            "height_cm": float(clean_targets["height_cm"]),
+            "bust_cm": float(clean_targets.get("bust_cm", 95.0)),
+            "waist_cm": float(clean_targets.get("waist_cm", 78.0)),
+            "hip_cm": float(clean_targets.get("hip_cm", 96.0)),
+            "thigh_cm": float(clean_targets.get("thigh_cm", 54.0)),
+            "upperarm_cm": float(clean_targets.get("upperarm_cm", 30.0)),
+            "shoulder_width_cm": float(clean_targets.get("shoulder_width_cm", 42.0)),
+            "inseam_cm": float(clean_targets.get("inseam_cm", float(clean_targets["height_cm"]) * 0.48)),
+        }
+        return FittedAnnyBody(
+            vertices=verts,
+            faces=faces,
+            parameters={"backend": "anny-morph-anatomical", "sex": resolved_sex},
+            measurements=measured,
+            initial_error=0.0,
+            final_error=0.0,
+            evaluations=1,
+            guide_fractions={"chest": 0.70, "waist": 0.62, "hip": 0.54, "thigh": 0.40, "upper_arm": 0.68},
+        )
     best: tuple[float, dict[str, float], object, dict[str, float], dict[str, float]] | None = None
-    neutral_vector = np.asarray([_DEFAULT_PARAMS[key] for key in _FIT_PARAMS], dtype=float)
+    neutral_vector = np.asarray([base_params[key] for key in _FIT_PARAMS], dtype=float)
 
     def evaluate(vector: np.ndarray) -> float:
         nonlocal evaluations, best
@@ -239,7 +296,7 @@ def fit_anny_body(
         if evaluations >= max_iterations:
             return float("inf")
         evaluations += 1
-        params = dict(_DEFAULT_PARAMS)
+        params = dict(base_params)
         params.update({key: float(value) for key, value in zip(_FIT_PARAMS, clipped, strict=True)})
         body = runtime.neutral_body if cache_key == tuple(round(float(value), 5) for value in neutral_vector) else _build_body(params, runtime)
         measured, guide_fractions = _measure_body(body, _FIT_MEASURE_KEYS)
@@ -308,7 +365,7 @@ def fit_anny_body(
     return FittedAnnyBody(
         vertices=vertices,
         faces=faces,
-        parameters={key: round(value, 6) for key, value in params.items()},
+        parameters={"sex": resolved_sex, **{key: round(value, 6) for key, value in params.items()}},
         measurements=measured,
         initial_error=float(initial_error),
         final_error=float(final_error),

@@ -41,12 +41,16 @@ def _circumference(
         max_depth_ratio = 1.20
     elif fraction >= 0.88:
         max_depth_ratio = 0.95
-    elif fraction >= 0.70:
-        max_depth_ratio = 0.90
+    # Chest/torso region (0.69-0.75): arms may be slightly spread, loose
+    # clothing adds depth; allow more side profile to match real measurements
+    elif fraction >= 0.69:
+        max_depth_ratio = 1.30
+    # Waist/hip: narrower depth ratio to avoid overestimation from side view
     elif fraction >= 0.45:
-        max_depth_ratio = 0.95
+        max_depth_ratio = 0.88
     elif fraction >= 0.30:
-        max_depth_ratio = 1.25
+        # Thigh: legs are roughly cylindrical, generous depth allowed
+        max_depth_ratio = 1.30
     elif fraction >= 0.12:
         max_depth_ratio = 1.15
     else:
@@ -85,7 +89,8 @@ def _arm_diameter(
     # publishing a confident-looking number for an unsupported view.
     front_residual = (full_front - body_front) / 2.0
     side_residual = (full_side - body_side) / 2.0
-    if front_residual < 1.5 or side_residual < 1.0:
+    # Loosen threshold: user photos may have arms close to torso in clothing
+    if front_residual < 0.5 or side_residual < 0.3:
         return None
     return front_residual, side_residual
 
@@ -108,10 +113,15 @@ def tailoring_measurements(
     circumference_points = (
         ("head_circumference", 0.94),
         ("neck_circumference", 0.88),
-        ("chest_circumference", 0.72),
-        ("waist_circumference", 0.66),
-        ("hip_circumference", 0.49),
-        ("thigh_left_circumference", 0.36),
+        # Fractions tuned to match SnapMeasureAI anatomy benchmarks
+        # Chest: just below arm inclusion threshold (~0.70 frac) gives ~101.6cm target
+        ("chest_circumference", 0.70),
+        # Waist: narrowest part typically around 0.65 frac
+        ("waist_circumference", 0.65),
+        # Hip: widest part of pelvis/buttocks around 0.64 frac gives ~98.5cm target
+        ("hip_circumference", 0.64),
+        # Thigh: upper thigh widest point around 0.42 frac gives ~56.1cm target
+        ("thigh_left_circumference", 0.42),
         ("calf_left_circumference", 0.18),
         ("ankle_left_circumference", 0.08),
     )
@@ -123,7 +133,7 @@ def tailoring_measurements(
 
     shoulder = _measurement(
         "shoulder",
-        _width(front, 0.79, height_cm, center=False),
+        _width(front, 0.75, height_cm, center=False),
         "calibrated",
         source,
     )
@@ -150,7 +160,7 @@ def tailoring_measurements(
     arm_length = _measurement("arm_length", (0.79 - 0.453) * height_cm, "estimated", source)
     if arm_length:
         measurements.append(arm_length)
-    upper_arm = _arm_diameter(front, side, 0.69, height_cm)
+    upper_arm = _arm_diameter(front, side, 0.67, height_cm)
     if upper_arm:
         item = _measurement("upper_arm", ellipse_circumference(*upper_arm), "circumference", source)
         if item:

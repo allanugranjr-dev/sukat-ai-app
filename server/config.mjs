@@ -22,7 +22,13 @@ function listEnv(name, fallback) {
 }
 
 const nodeEnv = process.env.NODE_ENV ?? "development";
-const isProduction = nodeEnv === "production";
+// Treat the deployment as production when EITHER the standard NODE_ENV or the
+// app's own SUKATAI_ENV/APP_ENV convention says so. The PHP mirror keys its
+// production flag off SUKATAI_ENV/APP_ENV, so honoring them here keeps the two
+// runtimes in the same mode and prevents the dev-code reveal from leaking in a
+// production deployment that only set the app-conventional variable.
+const explicitEnv = (process.env.SUKATAI_ENV ?? process.env.APP_ENV ?? "").trim().toLowerCase();
+const isProduction = nodeEnv === "production" || explicitEnv === "production";
 
 // Localhost development origins are only trusted outside production. In a
 // production deployment the credentialed CORS allowlist must be limited to the
@@ -69,9 +75,27 @@ export const config = {
   },
   sessionHours: numberEnv("SUKATAI_SESSION_HOURS", 24),
   notifications: {
-    emailProvider: (process.env.SUKATAI_EMAIL_PROVIDER ?? (process.env.RESEND_API_KEY ? "resend" : "console")).trim().toLowerCase(),
+    // Provider auto-selection: an explicit SUKATAI_EMAIL_PROVIDER wins; otherwise
+    // pick smtp when SMTP creds are present, then resend when a key is present,
+    // else the console no-op (which surfaces the OTP dev code on screen).
+    emailProvider: (process.env.SUKATAI_EMAIL_PROVIDER
+      ?? (process.env.SUKATAI_SMTP_HOST && process.env.SUKATAI_SMTP_USER && process.env.SUKATAI_SMTP_PASS
+        ? "smtp"
+        : process.env.RESEND_API_KEY ? "resend" : "console")).trim().toLowerCase(),
     emailApiKey: (process.env.RESEND_API_KEY ?? "").trim(),
     emailFrom: (process.env.SUKATAI_EMAIL_FROM ?? "SukatAI <onboarding@resend.dev>").trim(),
+    smtp: {
+      host: (process.env.SUKATAI_SMTP_HOST ?? "").trim(),
+      port: numberEnv("SUKATAI_SMTP_PORT", 587),
+      user: (process.env.SUKATAI_SMTP_USER ?? "").trim(),
+      pass: (process.env.SUKATAI_SMTP_PASS ?? "").trim(),
+      // Gmail on 587 uses STARTTLS (secure:false + upgrade); 465 uses implicit TLS.
+      secure: process.env.SUKATAI_SMTP_SECURE === "true"
+        ? true
+        : process.env.SUKATAI_SMTP_SECURE === "false"
+          ? false
+          : numberEnv("SUKATAI_SMTP_PORT", 587) === 465,
+    },
     smsProvider: (process.env.SUKATAI_SMS_PROVIDER ?? (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN ? "twilio" : "console")).trim().toLowerCase(),
     twilioAccountSid: (process.env.TWILIO_ACCOUNT_SID ?? "").trim(),
     twilioAuthToken: (process.env.TWILIO_AUTH_TOKEN ?? "").trim(),
@@ -92,6 +116,11 @@ export const config = {
         ? false
         : isProduction,
   cookieSameSite: process.env.SUKATAI_COOKIE_SAMESITE === "None" ? "None" : "Lax",
+  // The X-Forwarded-For header is client-controlled and only trustworthy when a
+  // reverse proxy that overwrites it sits in front of this process. Default OFF
+  // so a directly-exposed server keys rate limits on the real socket address; a
+  // deployment behind a trusted proxy sets SUKATAI_TRUST_PROXY=true.
+  trustProxy: process.env.SUKATAI_TRUST_PROXY === "true",
 };
 
 // A production deployment must never fall back to the passwordless root
