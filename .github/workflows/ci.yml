@@ -1,0 +1,47 @@
+name: CI
+
+# Runs on GitHub's servers (not your machine) for every push to main and
+# every pull request. The same checks can be run locally with the commands
+# in each step, or with `act` (https://github.com/nektos/act) + Docker.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    name: Web app (build + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  ai-service:
+    name: AI service (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ai-service/requirements.txt
+      # clad-body and anny are optional, lazily-imported fitter deps that
+      # require Python >=3.12. The suite runs on 3.11 and exercises the
+      # asset-free fallback paths, so install the rest of the stack plus the
+      # test tooling (this mirrors the local .venv the tests pass in).
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          grep -vE '^\s*(#|clad-body|anny)' requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt "pytest>=8.3,<9" "httpx>=0.28,<1"
+      - run: pytest -q
