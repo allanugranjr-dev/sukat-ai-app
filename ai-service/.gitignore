@@ -3,5 +3,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 output/*.glb
-models/
+models/*
+!models/canonical_human_weights.npz
 vendor/
